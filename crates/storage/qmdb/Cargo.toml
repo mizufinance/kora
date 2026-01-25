@@ -1,0 +1,23 @@
+[package]
+name = "kora-qmdb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "QMDB adapter implementing REVM Database traits for the Kora execution client"
+
+[dependencies]
+kora-primitives.workspace = true
+
+# Revm
+revm.workspace = true
+
+# Error handling
+thiserror.workspace = true
+
+[dev-dependencies]
+rstest = "0.24"
+
+[lints]
+workspace = true
