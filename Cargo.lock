@@ -1597,7 +1597,9 @@ name = "kora-executor"
 version = "0.1.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
+ "alloy-rlp",
  "kora-qmdb",
  "kora-traits",
  "revm",
