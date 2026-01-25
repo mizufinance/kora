@@ -1,7 +1,11 @@
 //! REVM database trait implementations.
+//!
+//! Note: REVM's `DatabaseRef` trait is synchronous, so we use `futures::executor::block_on`
+//! to bridge the async QMDB traits into the sync REVM interface. This is acceptable for
+//! in-memory stores but may block the async runtime for I/O-bound stores.
 
 use alloy_primitives::{Address, B256, Bytes, KECCAK256_EMPTY, U256};
-use kora_qmdb::{AccountEncoding, QmdbBatchable, QmdbGettable, StorageKey};
+use kora_qmdb::{AccountEncoding, ChangeSet, QmdbBatchable, QmdbGettable, StorageKey};
 use revm::{
     bytecode::Bytecode,
     database_interface::{DatabaseCommit, DatabaseRef},
@@ -10,6 +14,13 @@ use revm::{
 };
 
 use crate::{error::HandleError, qmdb::QmdbHandle};
+
+/// Wrapper for blocking async operations in sync contexts.
+///
+/// This is used to bridge async QMDB operations into REVM's sync DatabaseRef trait.
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    futures::executor::block_on(f)
+}
 
 impl<A, S, C> DatabaseRef for QmdbHandle<A, S, C>
 where
@@ -20,8 +31,8 @@ where
     type Error = HandleError;
 
     fn basic_ref(&self, address: Address) -> Result<Option<revm::state::AccountInfo>, Self::Error> {
-        let store = self.read()?;
-        match store.get_account(&address)? {
+        let store = block_on(self.read());
+        match block_on(store.get_account(&address))? {
             Some((nonce, balance, code_hash, _gen)) => {
                 Ok(Some(revm::state::AccountInfo { nonce, balance, code_hash, code: None }))
             }
@@ -33,24 +44,24 @@ where
         if code_hash == KECCAK256_EMPTY || code_hash == B256::ZERO {
             return Ok(Bytecode::default());
         }
-        let store = self.read()?;
-        store.get_code(&code_hash)?.map_or_else(
+        let store = block_on(self.read());
+        block_on(store.get_code(&code_hash))?.map_or_else(
             || Err(HandleError::CodeNotFound(code_hash)),
             |bytes| Ok(Bytecode::new_raw(Bytes::from(bytes))),
         )
     }
 
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        let store = self.read()?;
+        let store = block_on(self.read());
 
         // Get account to find generation
-        let generation = match store.get_account(&address)? {
+        let generation = match block_on(store.get_account(&address))? {
             Some((_, _, _, generation)) => generation,
             None => return Ok(U256::ZERO),
         };
 
         let key = StorageKey::new(address, generation, index);
-        Ok(store.get_storage(&key)?.unwrap_or(U256::ZERO))
+        Ok(block_on(store.get_storage(&key))?.unwrap_or(U256::ZERO))
     }
 
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
@@ -68,7 +79,7 @@ where
     fn commit(&mut self, changes: HashMap<Address, Account>) {
         use std::collections::BTreeMap;
 
-        use kora_qmdb::{AccountUpdate, ChangeSet};
+        use kora_qmdb::AccountUpdate;
 
         let mut changeset = ChangeSet::new();
 
@@ -97,7 +108,7 @@ where
         }
 
         // Ignore errors in DatabaseCommit (matches REVM's signature)
-        let _ = Self::commit(self, changeset);
+        let _ = block_on(Self::commit(self, changeset));
     }
 }
 
@@ -132,20 +143,25 @@ mod tests {
 
     impl std::error::Error for MemoryError {}
 
-    impl<K: Clone + Eq + std::hash::Hash, V: Clone> QmdbGettable for MemoryStore<K, V> {
+    impl<K: Clone + Eq + std::hash::Hash + Send + Sync, V: Clone + Send + Sync> QmdbGettable
+        for MemoryStore<K, V>
+    {
         type Error = MemoryError;
         type Key = K;
         type Value = V;
 
-        fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+        async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
             Ok(self.data.lock().unwrap().get(key).cloned())
         }
     }
 
-    impl<K: Clone + Eq + std::hash::Hash, V: Clone> QmdbBatchable for MemoryStore<K, V> {
-        fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
+    impl<K: Clone + Eq + std::hash::Hash + Send + Sync, V: Clone + Send + Sync> QmdbBatchable
+        for MemoryStore<K, V>
+    {
+        async fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
         where
-            I: IntoIterator<Item = (Self::Key, Option<Self::Value>)>,
+            I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
+            I::IntoIter: Send,
         {
             let mut data = self.data.lock().unwrap();
             for (key, value) in ops {

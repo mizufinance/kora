@@ -143,35 +143,35 @@ mod tests {
     struct MockStateDb;
 
     impl kora_traits::StateDbRead for MockStateDb {
-        fn nonce(
+        async fn nonce(
             &self,
             _address: &alloy_primitives::Address,
         ) -> Result<u64, kora_traits::StateDbError> {
             Ok(0)
         }
 
-        fn balance(
+        async fn balance(
             &self,
             _address: &alloy_primitives::Address,
         ) -> Result<alloy_primitives::U256, kora_traits::StateDbError> {
             Ok(alloy_primitives::U256::ZERO)
         }
 
-        fn code_hash(
+        async fn code_hash(
             &self,
             _address: &alloy_primitives::Address,
         ) -> Result<B256, kora_traits::StateDbError> {
             Ok(B256::ZERO)
         }
 
-        fn code(
+        async fn code(
             &self,
             _code_hash: &B256,
         ) -> Result<alloy_primitives::Bytes, kora_traits::StateDbError> {
             Ok(alloy_primitives::Bytes::new())
         }
 
-        fn storage(
+        async fn storage(
             &self,
             _address: &alloy_primitives::Address,
             _slot: &alloy_primitives::U256,
@@ -181,11 +181,11 @@ mod tests {
     }
 
     impl kora_traits::StateDbWrite for MockStateDb {
-        fn commit(&self, _changes: ChangeSet) -> Result<B256, kora_traits::StateDbError> {
+        async fn commit(&self, _changes: ChangeSet) -> Result<B256, kora_traits::StateDbError> {
             Ok(B256::ZERO)
         }
 
-        fn compute_root(&self, _changes: &ChangeSet) -> Result<B256, kora_traits::StateDbError> {
+        async fn compute_root(&self, _changes: &ChangeSet) -> Result<B256, kora_traits::StateDbError> {
             Ok(B256::ZERO)
         }
 
@@ -196,7 +196,7 @@ mod tests {
     }
 
     impl kora_traits::StateDb for MockStateDb {
-        fn state_root(&self) -> Result<B256, kora_traits::StateDbError> {
+        async fn state_root(&self) -> Result<B256, kora_traits::StateDbError> {
             Ok(B256::ZERO)
         }
     }

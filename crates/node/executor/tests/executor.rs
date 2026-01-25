@@ -52,7 +52,7 @@ impl MockStateDb {
 }
 
 impl StateDbRead for MockStateDb {
-    fn nonce(&self, address: &Address) -> Result<u64, StateDbError> {
+    async fn nonce(&self, address: &Address) -> Result<u64, StateDbError> {
         self.accounts
             .read()
             .unwrap()
@@ -61,7 +61,7 @@ impl StateDbRead for MockStateDb {
             .ok_or(StateDbError::AccountNotFound(*address))
     }
 
-    fn balance(&self, address: &Address) -> Result<U256, StateDbError> {
+    async fn balance(&self, address: &Address) -> Result<U256, StateDbError> {
         self.accounts
             .read()
             .unwrap()
@@ -70,7 +70,7 @@ impl StateDbRead for MockStateDb {
             .ok_or(StateDbError::AccountNotFound(*address))
     }
 
-    fn code_hash(&self, address: &Address) -> Result<B256, StateDbError> {
+    async fn code_hash(&self, address: &Address) -> Result<B256, StateDbError> {
         self.accounts
             .read()
             .unwrap()
@@ -79,7 +79,7 @@ impl StateDbRead for MockStateDb {
             .ok_or(StateDbError::AccountNotFound(*address))
     }
 
-    fn code(&self, code_hash: &B256) -> Result<Bytes, StateDbError> {
+    async fn code(&self, code_hash: &B256) -> Result<Bytes, StateDbError> {
         self.code
             .read()
             .unwrap()
@@ -88,7 +88,7 @@ impl StateDbRead for MockStateDb {
             .ok_or(StateDbError::CodeNotFound(*code_hash))
     }
 
-    fn storage(&self, address: &Address, slot: &U256) -> Result<U256, StateDbError> {
+    async fn storage(&self, address: &Address, slot: &U256) -> Result<U256, StateDbError> {
         let accounts = self.accounts.read().unwrap();
         Ok(accounts
             .get(address)
@@ -98,7 +98,7 @@ impl StateDbRead for MockStateDb {
 }
 
 impl StateDbWrite for MockStateDb {
-    fn commit(&self, changes: ChangeSet) -> Result<B256, StateDbError> {
+    async fn commit(&self, changes: ChangeSet) -> Result<B256, StateDbError> {
         let mut accounts = self.accounts.write().unwrap();
         let mut code_store = self.code.write().unwrap();
 
@@ -132,7 +132,7 @@ impl StateDbWrite for MockStateDb {
         Ok(root)
     }
 
-    fn compute_root(&self, _changes: &ChangeSet) -> Result<B256, StateDbError> {
+    async fn compute_root(&self, _changes: &ChangeSet) -> Result<B256, StateDbError> {
         // Simplified: just return current state root.
         Ok(*self.state_root.read().unwrap())
     }
@@ -144,7 +144,7 @@ impl StateDbWrite for MockStateDb {
 }
 
 impl StateDb for MockStateDb {
-    fn state_root(&self) -> Result<B256, StateDbError> {
+    async fn state_root(&self) -> Result<B256, StateDbError> {
         Ok(*self.state_root.read().unwrap())
     }
 }
@@ -279,18 +279,18 @@ fn test_block_context_with_various_header_values(#[case] number: u64, #[case] ga
 // Tests for MockStateDb (validates our test infrastructure)
 // ----------------------------------------------------------------------------
 
-#[test]
-fn test_mock_state_db_account_not_found() {
+#[tokio::test]
+async fn test_mock_state_db_account_not_found() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
 
-    let result = state.nonce(&address);
+    let result = state.nonce(&address).await;
 
     assert!(matches!(result, Err(StateDbError::AccountNotFound(_))));
 }
 
-#[test]
-fn test_mock_state_db_insert_and_read_account() {
+#[tokio::test]
+async fn test_mock_state_db_insert_and_read_account() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     let account = MockAccount {
@@ -302,36 +302,36 @@ fn test_mock_state_db_insert_and_read_account() {
 
     state.insert_account(address, account);
 
-    assert_eq!(state.nonce(&address).unwrap(), 5);
-    assert_eq!(state.balance(&address).unwrap(), U256::from(1000));
+    assert_eq!(state.nonce(&address).await.unwrap(), 5);
+    assert_eq!(state.balance(&address).await.unwrap(), U256::from(1000));
 }
 
-#[test]
-fn test_mock_state_db_storage_returns_zero_for_missing_slot() {
+#[tokio::test]
+async fn test_mock_state_db_storage_returns_zero_for_missing_slot() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     let account = MockAccount::default();
     state.insert_account(address, account);
 
     let slot = U256::from(42);
-    let value = state.storage(&address, &slot).unwrap();
+    let value = state.storage(&address, &slot).await.unwrap();
 
     assert_eq!(value, U256::ZERO);
 }
 
-#[test]
-fn test_mock_state_db_storage_returns_zero_for_missing_account() {
+#[tokio::test]
+async fn test_mock_state_db_storage_returns_zero_for_missing_account() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     let slot = U256::from(42);
 
-    let value = state.storage(&address, &slot).unwrap();
+    let value = state.storage(&address, &slot).await.unwrap();
 
     assert_eq!(value, U256::ZERO);
 }
 
-#[test]
-fn test_mock_state_db_storage_returns_value_for_existing_slot() {
+#[tokio::test]
+async fn test_mock_state_db_storage_returns_value_for_existing_slot() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     let mut storage = HashMap::new();
@@ -339,13 +339,13 @@ fn test_mock_state_db_storage_returns_value_for_existing_slot() {
     let account = MockAccount { storage, ..Default::default() };
     state.insert_account(address, account);
 
-    let value = state.storage(&address, &U256::from(42)).unwrap();
+    let value = state.storage(&address, &U256::from(42)).await.unwrap();
 
     assert_eq!(value, U256::from(999));
 }
 
-#[test]
-fn test_mock_state_db_commit_stores_changes() {
+#[tokio::test]
+async fn test_mock_state_db_commit_stores_changes() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
 
@@ -363,15 +363,15 @@ fn test_mock_state_db_commit_stores_changes() {
         },
     );
 
-    let root = state.commit(changes).unwrap();
+    let root = state.commit(changes).await.unwrap();
 
     assert_ne!(root, B256::ZERO);
-    assert_eq!(state.nonce(&address).unwrap(), 10);
-    assert_eq!(state.balance(&address).unwrap(), U256::from(5000));
+    assert_eq!(state.nonce(&address).await.unwrap(), 10);
+    assert_eq!(state.balance(&address).await.unwrap(), U256::from(5000));
 }
 
-#[test]
-fn test_mock_state_db_commit_handles_selfdestruct() {
+#[tokio::test]
+async fn test_mock_state_db_commit_handles_selfdestruct() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
 
@@ -396,13 +396,13 @@ fn test_mock_state_db_commit_handles_selfdestruct() {
         },
     );
 
-    state.commit(changes).unwrap();
+    state.commit(changes).await.unwrap();
 
-    assert!(matches!(state.nonce(&address), Err(StateDbError::AccountNotFound(_))));
+    assert!(matches!(state.nonce(&address).await, Err(StateDbError::AccountNotFound(_))));
 }
 
-#[test]
-fn test_mock_state_db_commit_stores_code() {
+#[tokio::test]
+async fn test_mock_state_db_commit_stores_code() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     let code_hash = B256::from([0xCC; 32]);
@@ -422,37 +422,37 @@ fn test_mock_state_db_commit_stores_code() {
         },
     );
 
-    state.commit(changes).unwrap();
+    state.commit(changes).await.unwrap();
 
-    assert_eq!(state.code(&code_hash).unwrap(), Bytes::from(code));
+    assert_eq!(state.code(&code_hash).await.unwrap(), Bytes::from(code));
 }
 
-#[test]
-fn test_mock_state_db_code_not_found() {
+#[tokio::test]
+async fn test_mock_state_db_code_not_found() {
     let state = MockStateDb::new();
     let code_hash = B256::from([0xCC; 32]);
 
-    let result = state.code(&code_hash);
+    let result = state.code(&code_hash).await;
 
     assert!(matches!(result, Err(StateDbError::CodeNotFound(_))));
 }
 
-#[test]
-fn test_mock_state_db_insert_code() {
+#[tokio::test]
+async fn test_mock_state_db_insert_code() {
     let state = MockStateDb::new();
     let code_hash = B256::from([0xCC; 32]);
     let code = Bytes::from(vec![0x60, 0x00]);
 
     state.insert_code(code_hash, code.clone());
 
-    assert_eq!(state.code(&code_hash).unwrap(), code);
+    assert_eq!(state.code(&code_hash).await.unwrap(), code);
 }
 
-#[test]
-fn test_mock_state_db_state_root() {
+#[tokio::test]
+async fn test_mock_state_db_state_root() {
     let state = MockStateDb::new();
 
-    let root = state.state_root().unwrap();
+    let root = state.state_root().await.unwrap();
 
     assert_eq!(root, B256::ZERO);
 }
@@ -501,25 +501,25 @@ fn test_mock_state_db_merge_changes() {
 // Tests for exists() default implementation
 // ----------------------------------------------------------------------------
 
-#[test]
-fn test_mock_state_db_exists_returns_false_for_missing_account() {
+#[tokio::test]
+async fn test_mock_state_db_exists_returns_false_for_missing_account() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
 
-    assert!(!state.exists(&address).unwrap());
+    assert!(!state.exists(&address).await.unwrap());
 }
 
-#[test]
-fn test_mock_state_db_exists_returns_true_for_account_with_nonce() {
+#[tokio::test]
+async fn test_mock_state_db_exists_returns_true_for_account_with_nonce() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     state.insert_account(address, MockAccount { nonce: 1, ..Default::default() });
 
-    assert!(state.exists(&address).unwrap());
+    assert!(state.exists(&address).await.unwrap());
 }
 
-#[test]
-fn test_mock_state_db_exists_returns_true_for_account_with_balance() {
+#[tokio::test]
+async fn test_mock_state_db_exists_returns_true_for_account_with_balance() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     state.insert_account(
@@ -527,16 +527,16 @@ fn test_mock_state_db_exists_returns_true_for_account_with_balance() {
         MockAccount { nonce: 0, balance: U256::from(1), ..Default::default() },
     );
 
-    assert!(state.exists(&address).unwrap());
+    assert!(state.exists(&address).await.unwrap());
 }
 
-#[test]
-fn test_mock_state_db_exists_returns_false_for_empty_account() {
+#[tokio::test]
+async fn test_mock_state_db_exists_returns_false_for_empty_account() {
     let state = MockStateDb::new();
     let address = Address::from([0x01; 20]);
     state.insert_account(address, MockAccount::default());
 
-    assert!(!state.exists(&address).unwrap());
+    assert!(!state.exists(&address).await.unwrap());
 }
 
 // ----------------------------------------------------------------------------

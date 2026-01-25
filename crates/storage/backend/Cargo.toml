@@ -1,25 +1,24 @@
 [package]
-name = "kora-handlers"
+name = "kora-backend"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Database handles with synchronization for Kora"
+description = "Commonware-storage based backend for Kora QMDB"
 
 [lints]
 workspace = true
 
 [dependencies]
 kora-qmdb = { path = "../qmdb" }
-kora-traits = { path = "../traits" }
+kora-handlers = { path = "../handlers" }
 
 alloy-primitives.workspace = true
 async-trait = "0.1"
-futures.workspace = true
-revm.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+tempfile = "3"
 tokio = { workspace = true, features = ["rt", "macros"] }

@@ -11,6 +11,6 @@ mod error;
 pub use error::HandleError;
 
 mod qmdb;
-pub use qmdb::QmdbHandle;
+pub use qmdb::{QmdbHandle, RootProvider};
 
 mod state;

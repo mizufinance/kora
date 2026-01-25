@@ -22,6 +22,10 @@ pub enum HandleError {
     /// Block hash not found.
     #[error("block hash not found: {0}")]
     BlockHashNotFound(u64),
+
+    /// Root computation error.
+    #[error("root computation error: {0}")]
+    RootComputation(String),
 }
 
 impl revm::database_interface::DBErrorMarker for HandleError {}

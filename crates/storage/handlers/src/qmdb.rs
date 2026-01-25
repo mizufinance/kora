@@ -1,13 +1,31 @@
 //! Thread-safe QMDB handle.
 
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
+use async_trait::async_trait;
 use kora_qmdb::{
     AccountEncoding, AccountUpdate, ChangeSet, QmdbBatchable, QmdbGettable, QmdbStore, StorageKey,
 };
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::error::HandleError;
+
+/// Trait for providing state root computation.
+///
+/// This trait abstracts the ability to compute and retrieve state roots
+/// from a backend storage implementation.
+#[async_trait]
+pub trait RootProvider: Send + Sync {
+    /// Get the current state root.
+    async fn state_root(&self) -> Result<B256, HandleError>;
+
+    /// Compute the state root without committing.
+    async fn compute_root(&mut self) -> Result<B256, HandleError>;
+
+    /// Commit changes and return the new state root.
+    async fn commit_and_get_root(&mut self) -> Result<B256, HandleError>;
+}
 
 /// Thread-safe handle to QMDB stores.
 ///
@@ -15,33 +33,48 @@ use crate::error::HandleError;
 /// Implements REVM database traits via the `adapter` module.
 pub struct QmdbHandle<A, S, C> {
     inner: Arc<RwLock<QmdbStore<A, S, C>>>,
+    root_provider: Option<Arc<RwLock<dyn RootProvider>>>,
 }
 
 impl<A, S, C> Clone for QmdbHandle<A, S, C> {
     fn clone(&self) -> Self {
-        Self { inner: Arc::clone(&self.inner) }
+        Self { inner: Arc::clone(&self.inner), root_provider: self.root_provider.clone() }
     }
 }
 
 impl<A, S, C> QmdbHandle<A, S, C> {
     /// Create a new handle from stores.
     pub fn new(accounts: A, storage: S, code: C) -> Self {
-        Self { inner: Arc::new(RwLock::new(QmdbStore::new(accounts, storage, code))) }
+        Self {
+            inner: Arc::new(RwLock::new(QmdbStore::new(accounts, storage, code))),
+            root_provider: None,
+        }
     }
 
     /// Create from an existing `QmdbStore`.
     pub fn from_store(store: QmdbStore<A, S, C>) -> Self {
-        Self { inner: Arc::new(RwLock::new(store)) }
+        Self { inner: Arc::new(RwLock::new(store)), root_provider: None }
+    }
+
+    /// Set the root provider for state root computation.
+    pub fn with_root_provider(mut self, provider: Arc<RwLock<dyn RootProvider>>) -> Self {
+        self.root_provider = Some(provider);
+        self
+    }
+
+    /// Get a reference to the root provider if set.
+    pub fn root_provider(&self) -> Option<&Arc<RwLock<dyn RootProvider>>> {
+        self.root_provider.as_ref()
     }
 
     /// Acquire read lock on the underlying store.
-    pub fn read(&self) -> Result<RwLockReadGuard<'_, QmdbStore<A, S, C>>, HandleError> {
-        self.inner.read().map_err(|_| HandleError::LockPoisoned)
+    pub async fn read(&self) -> RwLockReadGuard<'_, QmdbStore<A, S, C>> {
+        self.inner.read().await
     }
 
     /// Acquire write lock on the underlying store.
-    pub fn write(&self) -> Result<RwLockWriteGuard<'_, QmdbStore<A, S, C>>, HandleError> {
-        self.inner.write().map_err(|_| HandleError::LockPoisoned)
+    pub async fn write(&self) -> RwLockWriteGuard<'_, QmdbStore<A, S, C>> {
+        self.inner.write().await
     }
 }
 
@@ -53,14 +86,14 @@ where
     C: QmdbGettable<Key = B256, Value = Vec<u8>> + QmdbBatchable<Key = B256, Value = Vec<u8>>,
 {
     /// Commit changes atomically.
-    pub fn commit(&self, changes: ChangeSet) -> Result<(), HandleError> {
-        let mut store = self.write()?;
-        store.commit_changes(changes)?;
+    pub async fn commit(&self, changes: ChangeSet) -> Result<(), HandleError> {
+        let mut store = self.write().await;
+        store.commit_changes(changes).await?;
         Ok(())
     }
 
     /// Initialize with genesis allocations.
-    pub fn init_genesis(&self, allocs: Vec<(Address, U256)>) -> Result<(), HandleError> {
+    pub async fn init_genesis(&self, allocs: Vec<(Address, U256)>) -> Result<(), HandleError> {
         use std::collections::BTreeMap;
 
         use alloy_primitives::KECCAK256_EMPTY;
@@ -80,7 +113,7 @@ where
                 },
             );
         }
-        self.commit(changes)
+        self.commit(changes).await
     }
 }
 
@@ -120,20 +153,25 @@ mod tests {
 
     impl std::error::Error for MemoryError {}
 
-    impl<K: Clone + Eq + std::hash::Hash, V: Clone> QmdbGettable for MemoryStore<K, V> {
+    impl<K: Clone + Eq + std::hash::Hash + Send + Sync, V: Clone + Send + Sync> QmdbGettable
+        for MemoryStore<K, V>
+    {
         type Error = MemoryError;
         type Key = K;
         type Value = V;
 
-        fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+        async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
             Ok(self.data.lock().unwrap().get(key).cloned())
         }
     }
 
-    impl<K: Clone + Eq + std::hash::Hash, V: Clone> QmdbBatchable for MemoryStore<K, V> {
-        fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
+    impl<K: Clone + Eq + std::hash::Hash + Send + Sync, V: Clone + Send + Sync> QmdbBatchable
+        for MemoryStore<K, V>
+    {
+        async fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
         where
-            I: IntoIterator<Item = (Self::Key, Option<Self::Value>)>,
+            I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
+            I::IntoIter: Send,
         {
             let mut data = self.data.lock().unwrap();
             for (key, value) in ops {
@@ -166,20 +204,20 @@ mod tests {
         let _cloned = handle.clone();
     }
 
-    #[test]
-    fn init_genesis_creates_accounts() {
+    #[tokio::test]
+    async fn init_genesis_creates_accounts() {
         let handle = create_test_handle();
         let allocs = vec![
             (Address::repeat_byte(0x01), U256::from(1000)),
             (Address::repeat_byte(0x02), U256::from(2000)),
         ];
-        handle.init_genesis(allocs).unwrap();
+        handle.init_genesis(allocs).await.unwrap();
 
-        let store = handle.read().unwrap();
-        let acc1 = store.get_account(&Address::repeat_byte(0x01)).unwrap().unwrap();
+        let store = handle.read().await;
+        let acc1 = store.get_account(&Address::repeat_byte(0x01)).await.unwrap().unwrap();
         assert_eq!(acc1.1, U256::from(1000));
 
-        let acc2 = store.get_account(&Address::repeat_byte(0x02)).unwrap().unwrap();
+        let acc2 = store.get_account(&Address::repeat_byte(0x02)).await.unwrap().unwrap();
         assert_eq!(acc2.1, U256::from(2000));
     }
 }

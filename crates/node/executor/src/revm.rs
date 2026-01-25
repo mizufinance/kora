@@ -20,8 +20,7 @@ use revm::{
 };
 
 use crate::{
-    BlockContext, BlockExecutor, ExecutionError, ExecutionOutcome, Log, StateDbAdapter,
-    TransactionReceipt,
+    BlockContext, BlockExecutor, ExecutionError, ExecutionOutcome, ExecutionReceipt, StateDbAdapter,
 };
 
 /// REVM-based block executor.
@@ -289,34 +288,21 @@ fn build_receipt(
     tx_hash: B256,
     gas_used: u64,
     cumulative_gas_used: u64,
-) -> TransactionReceipt {
+) -> ExecutionReceipt {
     let (success, logs, contract_address) = match result {
         ExecutionResult::Success { logs, output, .. } => {
             let contract_addr = match output {
                 Output::Create(_, addr) => *addr,
                 Output::Call(_) => None,
             };
+            // REVM logs are already alloy_primitives::Log, just clone them
             (true, logs.clone(), contract_addr)
         }
         ExecutionResult::Revert { .. } => (false, Vec::new(), None),
         ExecutionResult::Halt { .. } => (false, Vec::new(), None),
     };
 
-    TransactionReceipt {
-        tx_hash,
-        success,
-        gas_used,
-        cumulative_gas_used,
-        logs: logs
-            .into_iter()
-            .map(|log| Log {
-                address: log.address,
-                topics: log.topics().to_vec(),
-                data: log.data.data.clone(),
-            })
-            .collect(),
-        contract_address,
-    }
+    ExecutionReceipt::new(tx_hash, success, gas_used, cumulative_gas_used, logs, contract_address)
 }
 
 /// Extract state changes from REVM execution state.
@@ -385,10 +371,10 @@ mod tests {
         };
 
         let receipt = build_receipt(&result, B256::ZERO, 21000, 21000);
-        assert!(receipt.success);
+        assert!(receipt.success());
         assert_eq!(receipt.gas_used, 21000);
-        assert_eq!(receipt.cumulative_gas_used, 21000);
-        assert!(receipt.logs.is_empty());
+        assert_eq!(receipt.cumulative_gas_used(), 21000);
+        assert!(receipt.logs().is_empty());
         assert!(receipt.contract_address.is_none());
     }
 
@@ -397,7 +383,7 @@ mod tests {
         let result = ExecutionResult::Revert { gas_used: 21000, output: Bytes::new() };
 
         let receipt = build_receipt(&result, B256::ZERO, 21000, 21000);
-        assert!(!receipt.success);
+        assert!(!receipt.success());
         assert_eq!(receipt.gas_used, 21000);
     }
 
@@ -411,7 +397,7 @@ mod tests {
         };
 
         let receipt = build_receipt(&result, B256::ZERO, 21000, 21000);
-        assert!(!receipt.success);
+        assert!(!receipt.success());
         assert_eq!(receipt.gas_used, 21000);
     }
 
@@ -473,9 +459,11 @@ mod tests {
 
         let mut state = EvmState::default();
 
-        let mut account = Account::default();
         // Created accounts also need to be touched to be processed
-        account.status = AccountStatus::Created | AccountStatus::Touched;
+        let account = Account {
+            status: AccountStatus::Created | AccountStatus::Touched,
+            ..Default::default()
+        };
 
         state.insert(Address::ZERO, account);
 

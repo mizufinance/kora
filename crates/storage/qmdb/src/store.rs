@@ -71,12 +71,12 @@ where
     C: QmdbGettable<Key = B256, Value = Vec<u8>>,
 {
     /// Get account info.
-    pub fn get_account(
+    pub async fn get_account(
         &self,
         address: &Address,
     ) -> Result<Option<(u64, U256, B256, u64)>, QmdbError> {
         let stores = self.stores()?;
-        match stores.accounts.get(address) {
+        match stores.accounts.get(address).await {
             Ok(Some(bytes)) => {
                 AccountEncoding::decode(&bytes).ok_or(QmdbError::DecodeError).map(Some)
             }
@@ -86,15 +86,15 @@ where
     }
 
     /// Get storage value.
-    pub fn get_storage(&self, key: &StorageKey) -> Result<Option<U256>, QmdbError> {
+    pub async fn get_storage(&self, key: &StorageKey) -> Result<Option<U256>, QmdbError> {
         let stores = self.stores()?;
-        stores.storage.get(key).map_err(|e| QmdbError::Storage(e.to_string()))
+        stores.storage.get(key).await.map_err(|e| QmdbError::Storage(e.to_string()))
     }
 
     /// Get code by hash.
-    pub fn get_code(&self, hash: &B256) -> Result<Option<Vec<u8>>, QmdbError> {
+    pub async fn get_code(&self, hash: &B256) -> Result<Option<Vec<u8>>, QmdbError> {
         let stores = self.stores()?;
-        stores.code.get(hash).map_err(|e| QmdbError::Storage(e.to_string()))
+        stores.code.get(hash).await.map_err(|e| QmdbError::Storage(e.to_string()))
     }
 }
 
@@ -106,13 +106,13 @@ where
     C: QmdbGettable<Key = B256, Value = Vec<u8>> + QmdbBatchable<Key = B256, Value = Vec<u8>>,
 {
     /// Build batches from a change set.
-    pub fn build_batches(&self, changes: &ChangeSet) -> Result<StoreBatches, QmdbError> {
+    pub async fn build_batches(&self, changes: &ChangeSet) -> Result<StoreBatches, QmdbError> {
         let stores = self.stores()?;
         let mut batches = StoreBatches::new();
 
         for (address, update) in &changes.accounts {
             // Get current account to check generation
-            let current_gen = match stores.accounts.get(address) {
+            let current_gen = match stores.accounts.get(address).await {
                 Ok(Some(bytes)) => {
                     AccountEncoding::decode(&bytes).map(|(_, _, _, g)| g).unwrap_or(0)
                 }
@@ -156,31 +156,37 @@ where
     }
 
     /// Apply batches to stores.
-    pub fn apply_batches(&mut self, batches: StoreBatches) -> Result<(), QmdbError> {
+    pub async fn apply_batches(&mut self, batches: StoreBatches) -> Result<(), QmdbError> {
         let stores = self.stores_mut()?;
 
         stores
             .accounts
             .write_batch(batches.accounts)
+            .await
             .map_err(|e| QmdbError::Storage(e.to_string()))?;
 
         stores
             .storage
             .write_batch(batches.storage)
+            .await
             .map_err(|e| QmdbError::Storage(e.to_string()))?;
 
-        stores.code.write_batch(batches.code).map_err(|e| QmdbError::Storage(e.to_string()))?;
+        stores
+            .code
+            .write_batch(batches.code)
+            .await
+            .map_err(|e| QmdbError::Storage(e.to_string()))?;
 
         Ok(())
     }
 
     /// Commit a change set to stores.
-    pub fn commit_changes(&mut self, changes: ChangeSet) -> Result<(), QmdbError> {
+    pub async fn commit_changes(&mut self, changes: ChangeSet) -> Result<(), QmdbError> {
         if changes.is_empty() {
             return Ok(());
         }
-        let batches = self.build_batches(&changes)?;
-        self.apply_batches(batches)
+        let batches = self.build_batches(&changes).await?;
+        self.apply_batches(batches).await
     }
 }
 
@@ -212,20 +218,25 @@ mod tests {
 
     impl std::error::Error for MemoryError {}
 
-    impl<K: Clone + Eq + std::hash::Hash, V: Clone> QmdbGettable for MemoryStore<K, V> {
+    impl<K: Clone + Eq + std::hash::Hash + Send + Sync, V: Clone + Send + Sync> QmdbGettable
+        for MemoryStore<K, V>
+    {
         type Error = MemoryError;
         type Key = K;
         type Value = V;
 
-        fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+        async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
             Ok(self.data.lock().unwrap().get(key).cloned())
         }
     }
 
-    impl<K: Clone + Eq + std::hash::Hash, V: Clone> QmdbBatchable for MemoryStore<K, V> {
-        fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
+    impl<K: Clone + Eq + std::hash::Hash + Send + Sync, V: Clone + Send + Sync> QmdbBatchable
+        for MemoryStore<K, V>
+    {
+        async fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
         where
-            I: IntoIterator<Item = (Self::Key, Option<Self::Value>)>,
+            I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
+            I::IntoIter: Send,
         {
             let mut data = self.data.lock().unwrap();
             for (key, value) in ops {
@@ -261,9 +272,9 @@ mod tests {
         assert!(store.stores().is_ok());
     }
 
-    #[test]
-    fn commit_empty_changes() {
+    #[tokio::test]
+    async fn commit_empty_changes() {
         let mut store = create_test_store();
-        store.commit_changes(ChangeSet::new()).unwrap();
+        store.commit_changes(ChangeSet::new()).await.unwrap();
     }
 }

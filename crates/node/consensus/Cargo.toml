@@ -21,8 +21,12 @@ alloy-rlp.workspace = true
 # Error handling
 thiserror.workspace = true
 
+# Async
+futures.workspace = true
+
 [dev-dependencies]
 rstest = "0.24"
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [lints]
 workspace = true

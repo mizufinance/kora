@@ -46,6 +46,7 @@ codegen-units = 1
 
 [workspace.dependencies]
 # Local crates
+kora-backend = { path = "crates/storage/backend" }
 kora-cli = { path = "crates/utilities/cli" }
 kora-consensus = { path = "crates/node/consensus" }
 kora-executor = { path = "crates/node/executor" }
@@ -53,10 +54,13 @@ kora-handlers = { path = "crates/storage/handlers" }
 kora-qmdb = { path = "crates/storage/qmdb" }
 kora-traits = { path = "crates/storage/traits" }
 
-# Commonware
-commonware-cryptography = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "v0.0.27" }
+# Commonware (published crates)
+commonware-cryptography = "0.0.65"
+commonware-runtime = "0.0.65"
+commonware-storage = "0.0.65"
+
+# Commonware (git refs for crates not yet on crates.io)
 commonware-p2p = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "v0.0.27" }
-commonware-runtime = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "v0.0.27" }
 commonware-stream = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "v0.0.27" }
 commonware-utils = { git = "https://github.com/commonwarexyz/monorepo.git", rev = "v0.0.27" }
 
