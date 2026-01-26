@@ -18,14 +18,4 @@ mod pool;
 pub use pool::{DEFAULT_PAGE_SIZE, DEFAULT_POOL_CAPACITY, DefaultPool};
 
 mod quota;
-// Re-export key types from commonware-consensus for convenience
-pub use commonware_consensus::{
-    CertifiableAutomaton, Relay, Reporter,
-    simplex::{
-        Config, Engine,
-        elector::{Config as ElectorConfig, Random, RoundRobin},
-        types::{Activity, Context},
-    },
-    types::{Epoch, ViewDelta},
-};
 pub use quota::{DEFAULT_REQUESTS_PER_SECOND, DefaultQuota};

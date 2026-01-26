@@ -13,9 +13,6 @@ mod error;
 pub use error::ExecutionError;
 
 mod outcome;
-// Re-export alloy types used in the public API
-pub use alloy_consensus::Receipt;
-pub use alloy_primitives::Log;
 pub use outcome::{ExecutionOutcome, ExecutionReceipt};
 
 mod revm;

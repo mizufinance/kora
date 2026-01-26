@@ -13,8 +13,6 @@ mod error;
 pub use error::ConsensusError;
 
 mod traits;
-// Re-export executor types
-pub use kora_executor::{BlockExecutor, ExecutionOutcome};
 pub use traits::{Digest, Mempool, SeedTracker, Snapshot, SnapshotStore, TxId};
 
 mod ledger;
