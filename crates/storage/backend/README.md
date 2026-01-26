@@ -1,11 +1,15 @@
-# kora-backend
+# `kora-backend`
 
-Commonware-storage based backend for Kora QMDB.
+<a href="https://github.com/refcell/kora/actions/workflows/ci.yml"><img src="https://github.com/refcell/kora/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+<a href="https://github.com/refcell/kora/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-d1d1f6.svg" alt="License"></a>
 
-This crate provides storage implementations using commonware-storage primitives for the three QMDB partitions:
-- **AccountStore**: Stores account state (nonce, balance, code hash, generation)
-- **StorageStore**: Stores contract storage slots
-- **CodeStore**: Stores contract bytecode
+Concrete storage backend for Kora QMDB.
+
+This crate implements the `QmdbGettable` and `QmdbBatchable` traits from [`kora-qmdb`](../qmdb) with in-memory stores:
+
+- **AccountStore** - Account state (nonce, balance, code hash, generation)
+- **StorageStore** - Contract storage slots
+- **CodeStore** - Contract bytecode
 
 ## Usage
 
@@ -23,3 +27,7 @@ let backend = CommonwareBackend::open(config).await?;
 // Get state root
 let root = backend.get_state_root().await?;
 ```
+
+## License
+
+[MIT License](https://github.com/refcell/kora/blob/main/LICENSE)

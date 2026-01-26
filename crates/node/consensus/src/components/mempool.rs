@@ -71,8 +71,8 @@ mod tests {
         let tx2 = vec![4, 5, 6];
 
         assert!(mempool.insert(tx1.clone()));
-        assert!(mempool.insert(tx2.clone()));
-        assert!(!mempool.insert(tx1.clone())); // Duplicate
+        assert!(mempool.insert(tx2));
+        assert!(!mempool.insert(tx1)); // Duplicate
 
         assert_eq!(mempool.len(), 2);
 

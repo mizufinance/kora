@@ -288,7 +288,10 @@ mod tests {
             Ok(B256::repeat_byte(0x42))
         }
 
-        async fn compute_root(&self, _changes: &ChangeSet) -> Result<B256, kora_traits::StateDbError> {
+        async fn compute_root(
+            &self,
+            _changes: &ChangeSet,
+        ) -> Result<B256, kora_traits::StateDbError> {
             Ok(B256::repeat_byte(0x42))
         }
 

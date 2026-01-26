@@ -185,7 +185,10 @@ mod tests {
             Ok(B256::ZERO)
         }
 
-        async fn compute_root(&self, _changes: &ChangeSet) -> Result<B256, kora_traits::StateDbError> {
+        async fn compute_root(
+            &self,
+            _changes: &ChangeSet,
+        ) -> Result<B256, kora_traits::StateDbError> {
             Ok(B256::ZERO)
         }
 

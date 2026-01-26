@@ -1,6 +1,6 @@
 //! Code store backed by commonware-storage.
 
-use alloy_primitives::{keccak256, B256};
+use alloy_primitives::{B256, keccak256};
 use kora_qmdb::{QmdbBatchable, QmdbGettable};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -23,10 +23,7 @@ pub struct CodeStore {
 impl CodeStore {
     /// Create a new code store.
     pub fn new() -> Self {
-        Self {
-            data: RwLock::new(HashMap::new()),
-            root_cache: RwLock::new(B256::ZERO),
-        }
+        Self { data: RwLock::new(HashMap::new()), root_cache: RwLock::new(B256::ZERO) }
     }
 
     /// Get the root hash of the code store.

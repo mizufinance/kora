@@ -45,7 +45,10 @@ where
             .get_code(code_hash)
             .await
             .map_err(|e| StateDbError::Storage(e.to_string()))?
-            .map_or_else(|| Err(StateDbError::CodeNotFound(*code_hash)), |bytes| Ok(Bytes::from(bytes)))
+            .map_or_else(
+                || Err(StateDbError::CodeNotFound(*code_hash)),
+                |bytes| Ok(Bytes::from(bytes)),
+            )
     }
 
     async fn storage(&self, address: &Address, slot: &U256) -> Result<U256, StateDbError> {

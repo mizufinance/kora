@@ -12,16 +12,11 @@ use crate::StateDbError;
 /// Provides account, storage, and code lookups without mutation.
 pub trait StateDbRead: Clone + Send + Sync + 'static {
     /// Get account nonce.
-    fn nonce(
-        &self,
-        address: &Address,
-    ) -> impl Future<Output = Result<u64, StateDbError>> + Send;
+    fn nonce(&self, address: &Address) -> impl Future<Output = Result<u64, StateDbError>> + Send;
 
     /// Get account balance.
-    fn balance(
-        &self,
-        address: &Address,
-    ) -> impl Future<Output = Result<U256, StateDbError>> + Send;
+    fn balance(&self, address: &Address)
+    -> impl Future<Output = Result<U256, StateDbError>> + Send;
 
     /// Get account code hash.
     fn code_hash(
@@ -30,10 +25,7 @@ pub trait StateDbRead: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<B256, StateDbError>> + Send;
 
     /// Get account code by hash.
-    fn code(
-        &self,
-        code_hash: &B256,
-    ) -> impl Future<Output = Result<Bytes, StateDbError>> + Send;
+    fn code(&self, code_hash: &B256) -> impl Future<Output = Result<Bytes, StateDbError>> + Send;
 
     /// Get storage slot value.
     fn storage(
@@ -43,10 +35,7 @@ pub trait StateDbRead: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<U256, StateDbError>> + Send;
 
     /// Check if an account exists.
-    fn exists(
-        &self,
-        address: &Address,
-    ) -> impl Future<Output = Result<bool, StateDbError>> + Send {
+    fn exists(&self, address: &Address) -> impl Future<Output = Result<bool, StateDbError>> + Send {
         let address = *address;
         async move {
             match self.nonce(&address).await {
@@ -65,10 +54,8 @@ pub trait StateDbWrite: Clone + Send + Sync + 'static {
     /// Commit a set of changes atomically.
     ///
     /// Returns the new state root after applying changes.
-    fn commit(
-        &self,
-        changes: ChangeSet,
-    ) -> impl Future<Output = Result<B256, StateDbError>> + Send;
+    fn commit(&self, changes: ChangeSet)
+    -> impl Future<Output = Result<B256, StateDbError>> + Send;
 
     /// Compute the state root that would result from applying changes.
     ///

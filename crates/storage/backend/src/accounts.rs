@@ -1,6 +1,6 @@
 //! Account store backed by commonware-storage.
 
-use alloy_primitives::{keccak256, Address, B256};
+use alloy_primitives::{Address, B256, keccak256};
 use kora_qmdb::{AccountEncoding, QmdbBatchable, QmdbGettable};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
@@ -23,10 +23,7 @@ pub struct AccountStore {
 impl AccountStore {
     /// Create a new account store.
     pub fn new() -> Self {
-        Self {
-            data: RwLock::new(HashMap::new()),
-            root_cache: RwLock::new(B256::ZERO),
-        }
+        Self { data: RwLock::new(HashMap::new()), root_cache: RwLock::new(B256::ZERO) }
     }
 
     /// Get the root hash of the account store.

@@ -199,6 +199,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::redundant_clone)]
     fn handle_is_clone() {
         let handle = create_test_handle();
         let _cloned = handle.clone();
