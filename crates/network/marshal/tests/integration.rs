@@ -150,12 +150,10 @@ async fn setup_validator(
     .expect("failed to init finalizations archive");
 
     // 4. Use ArchiveInitializer::init_blocks() for blocks archive
-    let finalized_blocks = ArchiveInitializer::init_blocks(
-        context.with_label("finalized_blocks"),
-        (),
-    )
-    .await
-    .expect("failed to init blocks archive");
+    let finalized_blocks =
+        ArchiveInitializer::init_blocks(context.with_label("finalized_blocks"), ())
+            .await
+            .expect("failed to init blocks archive");
 
     // 5. Use ActorInitializer::init() for the actor
     let (actor, mailbox, processed_height) = ActorInitializer::init(
@@ -348,4 +346,3 @@ fn test_start_marshal_multiple_validators() {
         assert_eq!(applications[1].blocks().len(), 1);
     });
 }
-

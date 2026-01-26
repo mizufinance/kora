@@ -1,27 +1,14 @@
 //! Kora - A minimal commonware + revm execution client.
 
-use clap::Parser;
-use eyre::Result;
+mod cli;
 
-#[derive(Parser, Debug)]
-#[command(name = "kora")]
-#[command(about = "A minimal commonware + revm execution client")]
-struct Args {
-    /// Enable verbose logging
-    #[arg(short, long)]
-    verbose: bool,
-}
+fn main() -> eyre::Result<()> {
+    use clap::Parser;
 
-fn main() -> Result<()> {
     kora_cli::Backtracing::enable();
-    #[cfg(unix)]
     kora_cli::SigsegvHandler::install();
 
-    let args = Args::parse();
+    let cli = cli::Cli::parse();
 
-    tracing_subscriber::fmt().with_env_filter(if args.verbose { "debug" } else { "info" }).init();
-
-    tracing::info!("Starting kora");
-
-    Ok(())
+    tokio::runtime::Builder::new_multi_thread().enable_all().build()?.block_on(cli.run())
 }

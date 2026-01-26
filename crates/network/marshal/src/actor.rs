@@ -7,7 +7,12 @@ use std::num::{NonZeroU64, NonZeroUsize};
 
 use commonware_consensus::{
     Block,
-    marshal::{Mailbox, actor::Actor, config::Config, store::{Blocks, Certificates}},
+    marshal::{
+        Mailbox,
+        actor::Actor,
+        config::Config,
+        store::{Blocks, Certificates},
+    },
     simplex::scheme::Scheme,
     types::{Epoch, FixedEpocher, Height, ViewDelta},
 };
@@ -96,11 +101,7 @@ impl ActorInitializer {
         provider: P,
         buffer_pool: PoolRef,
         block_codec_config: B::Cfg,
-    ) -> (
-        Actor<E, B, P, FC, FB, FixedEpocher, Sequential, A>,
-        Mailbox<P::Scheme, B>,
-        Height,
-    )
+    ) -> (Actor<E, B, P, FC, FB, FixedEpocher, Sequential, A>, Mailbox<P::Scheme, B>, Height)
     where
         E: CryptoRngCore + Spawner + Metrics + Clock + Storage,
         B: Block,
