@@ -120,9 +120,9 @@ where
                 Err(e) => return Err(QmdbError::Storage(e.to_string())),
             };
 
-            // Increment generation if account was recreated
+            // Increment generation on recreate or selfdestruct to invalidate old storage.
             let new_gen =
-                if update.created && current_gen > 0 { current_gen + 1 } else { current_gen };
+                if update.created || update.selfdestructed { current_gen.saturating_add(1) } else { current_gen };
 
             if update.selfdestructed {
                 batches.accounts.push((*address, None));

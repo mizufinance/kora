@@ -1,73 +1,67 @@
-//! Code store backed by commonware-storage.
+//! Code store bindings for commonware-storage.
 
-use std::collections::HashMap;
-
-use alloy_primitives::{B256, keccak256};
+use alloy_primitives::B256;
+use commonware_cryptography::sha256::Digest as QmdbDigest;
+use commonware_storage::kv::Batchable as _;
+use commonware_storage::qmdb::any::VariableConfig;
+use commonware_storage::translator::EightCap;
 use kora_qmdb::{QmdbBatchable, QmdbGettable};
-use tokio::sync::RwLock;
 
-use crate::error::BackendError;
+use crate::{
+    BackendError,
+    types::{CodeDb, CodeDbDirty, CodeKey, Context, StoreSlot},
+};
 
-/// Code store backed by commonware-storage.
-///
-/// Uses an in-memory hashmap with keccak256-based root computation.
-/// This is a placeholder implementation that will be replaced with
-/// full commonware QMDB integration when available.
-#[derive(Debug)]
+/// Code partition backed by commonware-storage.
 pub struct CodeStore {
-    /// In-memory storage for code.
-    data: RwLock<HashMap<B256, Vec<u8>>>,
-    /// Cached root hash.
-    root_cache: RwLock<B256>,
+    inner: StoreSlot<CodeDb>,
+}
+
+pub(crate) struct CodeStoreDirty {
+    inner: CodeDbDirty,
 }
 
 impl CodeStore {
-    /// Create a new code store.
-    pub fn new() -> Self {
-        Self { data: RwLock::new(HashMap::new()), root_cache: RwLock::new(B256::ZERO) }
+    /// Initialize the code store.
+    pub async fn init(
+        context: Context,
+        config: VariableConfig<EightCap, (commonware_codec::RangeCfg<usize>, ())>,
+    ) -> Result<Self, BackendError> {
+        let inner = CodeDb::init(context, config).await.map_err(|e| {
+            BackendError::Storage(e.to_string())
+        })?;
+        Ok(Self { inner: StoreSlot::new(inner) })
     }
 
-    /// Get the root hash of the code store.
-    pub async fn root(&self) -> Result<B256, BackendError> {
-        Ok(*self.root_cache.read().await)
+    /// Return the current authenticated root for the code partition.
+    pub fn root(&self) -> Result<QmdbDigest, BackendError> {
+        Ok(self.inner.get()?.root())
     }
 
-    /// Compute root from current data.
-    async fn compute_root(&self) -> B256 {
-        let data = self.data.read().await;
-        if data.is_empty() {
-            return B256::ZERO;
-        }
-        // Simple root computation: hash all sorted entries
-        let mut entries: Vec<_> = data.iter().collect();
-        entries.sort_by_key(|(k, _)| **k);
-
-        let mut hasher_input = Vec::new();
-        for (hash, code) in entries {
-            hasher_input.extend_from_slice(hash.as_slice());
-            hasher_input.extend_from_slice(code);
-        }
-        keccak256(&hasher_input)
+    pub(crate) fn into_dirty(self) -> Result<CodeStoreDirty, BackendError> {
+        let inner = self.inner.into_inner()?;
+        Ok(CodeStoreDirty { inner: inner.into_mutable() })
     }
 }
 
-impl Default for CodeStore {
-    fn default() -> Self {
-        Self::new()
+impl CodeStoreDirty {
+    pub(crate) fn root(self) -> QmdbDigest {
+        self.inner.into_merkleized().root()
+    }
+}
+
+impl std::fmt::Debug for CodeStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CodeStore").finish_non_exhaustive()
     }
 }
 
 /// Error type for code store operations.
-#[derive(Debug)]
-pub struct CodeStoreError(pub String);
+pub type CodeStoreError = BackendError;
 
-impl std::fmt::Display for CodeStoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "code store error: {}", self.0)
-    }
+fn code_key(hash: B256) -> CodeKey {
+    CodeKey::new(hash.0)
 }
-
-impl std::error::Error for CodeStoreError {}
 
 impl QmdbGettable for CodeStore {
     type Key = B256;
@@ -75,8 +69,11 @@ impl QmdbGettable for CodeStore {
     type Error = CodeStoreError;
 
     async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
-        let data = self.data.read().await;
-        Ok(data.get(key).cloned())
+        self.inner
+            .get()?
+            .get(&code_key(*key))
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))
     }
 }
 
@@ -86,61 +83,46 @@ impl QmdbBatchable for CodeStore {
         I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
         I::IntoIter: Send,
     {
-        let mut data = self.data.write().await;
-
-        for (key, value) in ops {
-            match value {
-                Some(v) => {
-                    data.insert(key, v);
-                }
-                None => {
-                    data.remove(&key);
-                }
-            }
-        }
-        drop(data);
-
-        // Update root cache
-        let new_root = self.compute_root().await;
-        *self.root_cache.write().await = new_root;
-
+        let inner = self.inner.take()?;
+        let mut dirty = inner.into_mutable();
+        let mapped = ops.into_iter().map(|(hash, value)| (code_key(hash), value));
+        dirty
+            .write_batch(mapped)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        let merkleized = dirty.into_merkleized();
+        let (inner, _) = merkleized
+            .commit(None)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        self.inner.restore(inner);
         Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl QmdbGettable for CodeStoreDirty {
+    type Key = B256;
+    type Value = Vec<u8>;
+    type Error = CodeStoreError;
 
-    #[tokio::test]
-    async fn code_store_get_missing() {
-        let store = CodeStore::new();
-        let result = store.get(&B256::ZERO).await.unwrap();
-        assert!(result.is_none());
+    async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+        self.inner
+            .get(&code_key(*key))
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))
     }
+}
 
-    #[tokio::test]
-    async fn code_store_write_and_get() {
-        let mut store = CodeStore::new();
-        let hash = B256::repeat_byte(0x01);
-        let code = vec![0x60, 0x00, 0x60, 0x00]; // Simple bytecode
-
-        store.write_batch(vec![(hash, Some(code.clone()))]).await.unwrap();
-
-        let result = store.get(&hash).await.unwrap();
-        assert_eq!(result, Some(code));
-    }
-
-    #[tokio::test]
-    async fn code_store_delete() {
-        let mut store = CodeStore::new();
-        let hash = B256::repeat_byte(0x01);
-        let code = vec![0x60, 0x00];
-
-        store.write_batch(vec![(hash, Some(code))]).await.unwrap();
-        assert!(store.get(&hash).await.unwrap().is_some());
-
-        store.write_batch(vec![(hash, None)]).await.unwrap();
-        assert!(store.get(&hash).await.unwrap().is_none());
+impl QmdbBatchable for CodeStoreDirty {
+    async fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
+        I::IntoIter: Send,
+    {
+        let mapped = ops.into_iter().map(|(hash, value)| (code_key(hash), value));
+        self.inner
+            .write_batch(mapped)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))
     }
 }

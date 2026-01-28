@@ -8,6 +8,7 @@ implementing REVM database traits for EVM execution.
 ## Key Types
 
 - `QmdbHandle` - Thread-safe handle to QMDB stores with `Arc<RwLock>` synchronization
+- `QmdbRefDb` - Tokio-backed REVM `DatabaseRef` adapter for async QMDB handles
 - `HandleError` - Error type implementing REVM's `DBErrorMarker`
 
 ## Usage
@@ -21,6 +22,10 @@ let handle = QmdbHandle::new(accounts, storage, code);
 
 // Use as REVM database
 let account = handle.basic_ref(address)?;
+
+// Or wrap with a Tokio-backed adapter for sync REVM access
+let db = kora_handlers::QmdbRefDb::new(handle).expect("tokio runtime");
+let account = db.basic_ref(address)?;
 ```
 
 ## Design

@@ -23,13 +23,12 @@ use alloy_evm::{
 };
 use anyhow::Context as _;
 
-use crate::{
-    domain::{AccountChange, StateChanges, Tx},
-    qmdb::{AccountUpdate, QmdbChangeSet},
-};
+use crate::qmdb::{AccountUpdate, QmdbChangeSet};
+use kora_domain::{AccountChange, StateChanges, Tx};
 
 /// Example chain id used by the simulation.
 pub const CHAIN_ID: u64 = 1337;
+/// Raw 20-byte address for the example precompile that exposes `prevrandao`.
 pub const SEED_PRECOMPILE_ADDRESS_BYTES: [u8; 20] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0xFF,
@@ -153,7 +152,7 @@ pub(crate) fn apply_evm_state_to_qmdb_changes(changes: &mut QmdbChangeSet, state
             continue;
         }
         let update = account_update_from_evm_account(account);
-        changes.apply_update(*address, update);
+        changes.insert(*address, update);
     }
 }
 
@@ -211,7 +210,7 @@ mod tests {
     use super::{
         evm_env, execute_txs, precompiles_with_seed, seed_precompile_address, tx_env_from_db,
     };
-    use crate::domain::Tx;
+    use kora_domain::Tx;
 
     const HEIGHT: u64 = 1;
     const INITIAL_BALANCE: u64 = 1_000_000;

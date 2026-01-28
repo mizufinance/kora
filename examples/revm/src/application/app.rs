@@ -24,10 +24,7 @@ use super::{
     execution::{evm_env, execute_txs},
     ledger::{LedgerService, LedgerView},
 };
-use crate::{
-    ConsensusDigest, PublicKey,
-    domain::{Block, TxId},
-};
+use kora_domain::{Block, ConsensusDigest, PublicKey, TxId};
 
 /// Helper function for propose that owns all its inputs.
 async fn propose_inner<S>(

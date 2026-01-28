@@ -16,9 +16,13 @@ kora-handlers = { path = "../handlers" }
 
 alloy-primitives.workspace = true
 async-trait = "0.1"
+bytes.workspace = true
+commonware-codec.workspace = true
+commonware-cryptography.workspace = true
+commonware-runtime.workspace = true
+commonware-storage.workspace = true
+commonware-utils.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { workspace = true, features = ["rt", "macros"] }

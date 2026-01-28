@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::domain::{Tx, TxId};
+use kora_domain::{Tx, TxId};
 
 #[derive(Default, Clone)]
 pub(crate) struct Mempool(BTreeMap<TxId, Tx>);

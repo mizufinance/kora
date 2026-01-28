@@ -10,15 +10,13 @@ use commonware_p2p::simulated;
 use commonware_parallel::Sequential;
 use commonware_runtime::{Metrics as _, buffer::PoolRef, tokio};
 use commonware_storage::archive::immutable;
-use commonware_utils::{NZU64, NZUsize};
+use commonware_utils::{NZU64, NZUsize, acknowledgement::Exact};
 
 use super::config::{
     ChannelReceiver, ChannelSender, EPOCH_LENGTH, MAILBOX_SIZE, Peer, ThresholdScheme,
 };
-use crate::{
-    application::FinalizedReporter,
-    domain::{Block, BlockCfg},
-};
+use crate::application::FinalizedReporter;
+use kora_domain::{Block, BlockCfg};
 
 #[derive(Clone)]
 struct ConstantSchemeProvider(Arc<ThresholdScheme>);
@@ -50,7 +48,7 @@ pub(super) struct MarshalStart<M> {
     /// Node identity key used for network links.
     pub(super) public_key: Peer,
     /// Control channel used to register and rate-limit transport channels.
-    pub(super) control: simulated::Control<Peer, tokio::Context>,
+    pub(super) control: simulated::Control<Peer, super::TransportContext>,
     /// P2P manager holding the transport/peering state.
     pub(super) manager: M,
     /// Threshold signing scheme for this node.
@@ -182,7 +180,7 @@ where
     .context("init blocks archive")?;
 
     let epocher = FixedEpocher::new(NZU64!(EPOCH_LENGTH));
-    let (actor, mailbox, _last_processed_height) = marshal::Actor::init(
+    let (actor, mailbox, _last_processed_height) = marshal::Actor::<_, _, _, _, _, _, _, Exact>::init(
         ctx.clone(),
         finalizations_by_height,
         finalized_blocks,

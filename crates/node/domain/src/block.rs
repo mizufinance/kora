@@ -5,10 +5,7 @@ use bytes::{Buf, BufMut};
 use commonware_codec::{Encode, EncodeSize, Error as CodecError, RangeCfg, Read, ReadExt, Write};
 use commonware_cryptography::{Committable, Digestible, Hasher as _, Sha256};
 
-use super::{
-    ids::{BlockId, StateRoot, read_b256, write_b256},
-    tx::{Tx, TxCfg},
-};
+use crate::{BlockId, StateRoot, read_b256, write_b256, Tx, TxCfg};
 
 #[derive(Clone, Copy, Debug)]
 /// Configuration used when decoding blocks and their transactions.
@@ -35,6 +32,7 @@ pub struct Block {
 }
 
 impl Block {
+    /// Compute the block identifier from its encoded contents.
     pub fn id(&self) -> BlockId {
         BlockId(keccak256(self.encode()))
     }

@@ -3095,11 +3095,16 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "async-trait",
+ "bytes",
+ "commonware-codec",
+ "commonware-cryptography",
+ "commonware-runtime",
+ "commonware-storage",
+ "commonware-utils",
  "kora-handlers",
  "kora-qmdb",
  "tempfile",
  "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]
@@ -3157,7 +3162,6 @@ name = "kora-domain"
 version = "0.1.0"
 dependencies = [
  "alloy-evm",
- "anyhow",
  "bytes",
  "commonware-codec",
  "commonware-consensus",
@@ -3247,11 +3251,18 @@ dependencies = [
  "commonware-storage",
  "commonware-utils",
  "futures",
+ "governor",
+ "kora-backend",
  "kora-domain",
+ "kora-handlers",
+ "kora-qmdb",
+ "kora-traits",
  "libc",
+ "prometheus-client",
  "rand 0.8.5",
  "revm",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 

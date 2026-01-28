@@ -9,10 +9,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{
-    ConsensusDigest, StateRoot,
-    qmdb::{QmdbChangeSet, RevmDb},
-};
+use crate::qmdb::{QmdbChangeSet, RevmDb};
+use kora_domain::{ConsensusDigest, StateRoot};
 
 #[derive(Clone)]
 /// Cached execution snapshot for a specific digest.

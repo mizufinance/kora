@@ -20,8 +20,8 @@ pub trait RootProvider: Send + Sync {
     /// Get the current state root.
     async fn state_root(&self) -> Result<B256, HandleError>;
 
-    /// Compute the state root without committing.
-    async fn compute_root(&mut self) -> Result<B256, HandleError>;
+    /// Compute the state root without committing the provided changes.
+    async fn compute_root(&mut self, changes: &ChangeSet) -> Result<B256, HandleError>;
 
     /// Commit changes and return the new state root.
     async fn commit_and_get_root(&mut self) -> Result<B256, HandleError>;

@@ -5,7 +5,8 @@
 
 Concrete storage backend for Kora QMDB.
 
-This crate implements the `QmdbGettable` and `QmdbBatchable` traits from [`kora-qmdb`](../qmdb) with in-memory stores:
+This crate implements the `QmdbGettable` and `QmdbBatchable` traits from [`kora-qmdb`](../qmdb)
+using `commonware-storage` QMDB partitions.
 
 - **AccountStore** - Account state (nonce, balance, code hash, generation)
 - **StorageStore** - Contract storage slots
@@ -14,18 +15,16 @@ This crate implements the `QmdbGettable` and `QmdbBatchable` traits from [`kora-
 ## Usage
 
 ```rust,ignore
+use commonware_runtime::buffer::PoolRef;
+use commonware_utils::{NZU16, NZUsize};
 use kora_backend::{CommonwareBackend, QmdbBackendConfig};
-use std::path::PathBuf;
 
-// Create an in-memory backend
-let backend = CommonwareBackend::new();
-
-// Or open with configuration
-let config = QmdbBackendConfig::new(PathBuf::from("/path/to/data"), 1_000_000);
-let backend = CommonwareBackend::open(config).await?;
+let buffer_pool = PoolRef::new(NZU16!(16_384), NZUsize!(10_000));
+let config = QmdbBackendConfig::new("node-0-qmdb", buffer_pool);
+let backend = CommonwareBackend::open(context, config).await?;
 
 // Get state root
-let root = backend.get_state_root().await?;
+let root = backend.state_root()?;
 ```
 
 ## License

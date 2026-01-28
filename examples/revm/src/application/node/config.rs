@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use commonware_consensus::simplex::scheme::bls12381_threshold::vrf;
+use commonware_consensus::simplex::scheme::bls12381_threshold;
 use commonware_cryptography::{
     Signer as _,
     bls12381::{
@@ -9,16 +9,14 @@ use commonware_cryptography::{
     ed25519,
 };
 use commonware_p2p::simulated;
-use commonware_runtime::{Quota, buffer::PoolRef, tokio};
+use commonware_runtime::{Quota, buffer::PoolRef};
 use commonware_utils::{N3f1, NZU16, NZU32, NZUsize, TryCollect as _, ordered::Set};
 use rand::{SeedableRng as _, rngs::StdRng};
 
-use crate::{
-    PublicKey,
-    domain::{BlockCfg, TxCfg},
-};
+use super::TransportContext;
+use kora_domain::{BlockCfg, PublicKey, TxCfg};
 
-pub(crate) type ThresholdScheme = vrf::Scheme<PublicKey, MinSig>;
+pub(crate) type ThresholdScheme = bls12381_threshold::Scheme<PublicKey, MinSig>;
 
 /// Namespace used by simplex votes in this example.
 pub(crate) const SIMPLEX_NAMESPACE: &[u8] = b"_COMMONWARE_REVM_SIMPLEX";
@@ -43,7 +41,7 @@ const BLOCK_CODEC_MAX_TXS: usize = 64;
 const BLOCK_CODEC_MAX_CALLDATA: usize = 1024;
 
 pub(crate) type Peer = PublicKey;
-pub(crate) type ChannelSender = simulated::Sender<Peer, tokio::Context>;
+pub(crate) type ChannelSender = simulated::Sender<Peer, TransportContext>;
 pub(crate) type ChannelReceiver = simulated::Receiver<Peer>;
 
 // This example keeps everything in a single epoch for simplicity. The `Marshaled` wrapper also
@@ -88,7 +86,7 @@ pub(crate) fn threshold_schemes(
     let mut schemes = Vec::with_capacity(n);
     for pk in participants.iter() {
         let share = shares.get_value(pk).expect("share exists").clone();
-        let scheme = vrf::Scheme::signer(
+        let scheme = bls12381_threshold::Scheme::signer(
             SIMPLEX_NAMESPACE,
             participants.clone(),
             output.public().clone(),

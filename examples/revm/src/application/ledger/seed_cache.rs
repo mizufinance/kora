@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use alloy_evm::revm::primitives::B256;
 
-use crate::ConsensusDigest;
+use kora_domain::ConsensusDigest;
 
 #[derive(Clone)]
 pub(crate) struct SeedCache(BTreeMap<ConsensusDigest, B256>);

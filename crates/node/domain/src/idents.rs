@@ -28,11 +28,13 @@ impl FixedSize for StateRoot {
     const SIZE: usize = 32;
 }
 
-pub(super) fn write_b256(value: &B256, buf: &mut impl BufMut) {
+/// Encode a `B256` into the buffer as raw bytes.
+pub fn write_b256(value: &B256, buf: &mut impl BufMut) {
     buf.put_slice(value.as_slice());
 }
 
-pub(super) fn read_b256(buf: &mut impl Buf) -> Result<B256, CodecError> {
+/// Decode a `B256` from the buffer, returning an error if insufficient bytes remain.
+pub fn read_b256(buf: &mut impl Buf) -> Result<B256, CodecError> {
     if buf.remaining() < 32 {
         return Err(CodecError::EndOfBuffer);
     }

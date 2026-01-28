@@ -3,13 +3,14 @@
 //! The example chain "prefunds" two addresses and injects a single transfer at height 1.
 
 use alloy_evm::revm::primitives::{Address, Bytes as EvmBytes, U256};
+use kora_domain::Tx;
 
 #[derive(Clone, Debug)]
 pub(super) struct DemoTransfer {
     pub(super) from: Address,
     pub(super) to: Address,
     pub(super) alloc: Vec<(Address, U256)>,
-    pub(super) tx: crate::Tx,
+    pub(super) tx: Tx,
     pub(super) expected_from: U256,
     pub(super) expected_to: U256,
 }
@@ -18,7 +19,7 @@ impl DemoTransfer {
     pub(super) fn new() -> Self {
         let from = Address::from([0x11u8; 20]);
         let to = Address::from([0x22u8; 20]);
-        let tx = crate::Tx {
+        let tx = Tx {
             from,
             to,
             value: U256::from(100u64),

@@ -22,7 +22,7 @@ pub(super) struct NodeChannels {
 
 /// Register the simulated transport channels for a node.
 pub(super) async fn register_channels(
-    control: &mut simulated::Control<Peer, commonware_runtime::tokio::Context>,
+    control: &mut simulated::Control<Peer, super::TransportContext>,
     quota: Quota,
 ) -> anyhow::Result<NodeChannels> {
     let votes = control.register(CHANNEL_VOTES, quota).await.context("register votes channel")?;

@@ -21,5 +21,4 @@ alloy-evm = { workspace = true, features = ["std"] }
 
 # General
 bytes.workspace = true
-anyhow.workspace = true
 futures.workspace = true

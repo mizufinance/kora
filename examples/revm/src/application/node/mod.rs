@@ -9,7 +9,9 @@ mod config;
 mod env;
 mod marshal;
 mod start;
+mod transport;
 
 pub(crate) use config::{ThresholdScheme, threshold_schemes};
 pub(crate) use env::{NodeEnvironment, TransportControl};
 pub(crate) use start::start_node;
+pub(crate) use transport::TransportContext;

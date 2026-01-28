@@ -17,7 +17,7 @@ kora-traits = { path = "../traits" }
 alloy-primitives.workspace = true
 async-trait = "0.1"
 futures.workspace = true
-revm.workspace = true
+revm = { workspace = true, features = ["std", "asyncdb"] }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 

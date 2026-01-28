@@ -20,22 +20,31 @@ pub struct StateChangesCfg {
 #[derive(Clone, Debug, PartialEq, Eq)]
 /// Canonical representation of a touched account's post-transaction state.
 pub struct AccountChange {
+    /// True if the account was accessed during execution.
     pub touched: bool,
+    /// True if the account was newly created during execution.
     pub created: bool,
+    /// True if the account was self-destructed during execution.
     pub selfdestructed: bool,
+    /// Final nonce after execution.
     pub nonce: u64,
+    /// Final balance after execution.
     pub balance: U256,
+    /// Hash of the account bytecode after execution.
     pub code_hash: B256,
+    /// Storage slot updates keyed by slot.
     pub storage: BTreeMap<U256, U256>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 /// Canonical per-transaction state delta.
 pub struct StateChanges {
+    /// Map of account changes keyed by address.
     pub accounts: BTreeMap<Address, AccountChange>,
 }
 
 impl StateChanges {
+    /// Returns true when no accounts were touched.
     pub fn is_empty(&self) -> bool {
         self.accounts.is_empty()
     }

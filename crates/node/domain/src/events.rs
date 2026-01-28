@@ -8,35 +8,48 @@ use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use super::TxId;
 use crate::ConsensusDigest;
 
-/// Ledger-related domain events.
+/// Ledger-related domain events emitted by the example chain.
 #[derive(Clone, Debug)]
-pub(crate) enum LedgerEvent {
+pub enum LedgerEvent {
     #[allow(dead_code)]
+    /// A transaction has been submitted to the ledger.
     TransactionSubmitted(TxId),
     #[allow(dead_code)]
+    /// A snapshot has been persisted to durable storage.
     SnapshotPersisted(ConsensusDigest),
     #[allow(dead_code)]
+    /// The randomness seed has been updated for future blocks.
     SeedUpdated(ConsensusDigest, B256),
 }
 
-#[derive(Clone)]
-pub(crate) struct LedgerEvents {
+/// Pub-sub registry for ledger events.
+#[derive(Clone, Debug)]
+pub struct LedgerEvents {
     listeners: Arc<StdMutex<Vec<UnboundedSender<LedgerEvent>>>>,
 }
 
 impl LedgerEvents {
-    pub(crate) fn new() -> Self {
+    /// Create a new, empty event registry.
+    pub fn new() -> Self {
         Self { listeners: Arc::new(StdMutex::new(Vec::new())) }
     }
 
-    pub(crate) fn publish(&self, event: LedgerEvent) {
+    /// Publish an event to all current subscribers, dropping closed channels.
+    pub fn publish(&self, event: LedgerEvent) {
         let mut guard = self.listeners.lock().unwrap();
         guard.retain(|sender| sender.unbounded_send(event.clone()).is_ok());
     }
 
-    pub(crate) fn subscribe(&self) -> UnboundedReceiver<LedgerEvent> {
+    /// Subscribe to ledger events and receive a stream of updates.
+    pub fn subscribe(&self) -> UnboundedReceiver<LedgerEvent> {
         let (sender, receiver) = unbounded();
         self.listeners.lock().unwrap().push(sender);
         receiver
+    }
+}
+
+impl Default for LedgerEvents {
+    fn default() -> Self {
+        Self::new()
     }
 }

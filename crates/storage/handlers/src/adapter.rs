@@ -4,16 +4,69 @@
 //! to bridge the async QMDB traits into the sync REVM interface. This is acceptable for
 //! in-memory stores but may block the async runtime for I/O-bound stores.
 
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256, Bytes, KECCAK256_EMPTY, U256};
 use kora_qmdb::{AccountEncoding, ChangeSet, QmdbBatchable, QmdbGettable, StorageKey};
 use revm::{
     bytecode::Bytecode,
-    database_interface::{DatabaseCommit, DatabaseRef},
+    database_interface::{
+        DatabaseCommit,
+        DatabaseRef,
+        async_db::{DatabaseAsyncRef, WrapDatabaseAsync},
+    },
     primitives::HashMap,
     state::Account,
 };
 
 use crate::{error::HandleError, qmdb::QmdbHandle};
+
+/// Tokio-backed REVM database wrapper for async QMDB handles.
+///
+/// This adapter uses `WrapDatabaseAsync` under the hood to satisfy REVM's sync `DatabaseRef`
+/// trait while executing async reads on a Tokio runtime.
+#[derive(Clone)]
+pub struct QmdbRefDb<A, S, C> {
+    inner: Arc<WrapDatabaseAsync<QmdbHandle<A, S, C>>>,
+}
+
+impl<A, S, C> std::fmt::Debug for QmdbRefDb<A, S, C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QmdbRefDb").finish()
+    }
+}
+
+impl<A, S, C> QmdbRefDb<A, S, C> {
+    /// Wraps a QMDB handle with the current Tokio runtime.
+    ///
+    /// Returns `None` if no multi-threaded runtime is available.
+    pub fn new(handle: QmdbHandle<A, S, C>) -> Option<Self> {
+        WrapDatabaseAsync::new(handle).map(|wrapped| Self { inner: Arc::new(wrapped) })
+    }
+}
+
+impl<A, S, C> DatabaseRef for QmdbRefDb<A, S, C>
+where
+    QmdbHandle<A, S, C>: DatabaseAsyncRef<Error = HandleError>,
+{
+    type Error = HandleError;
+
+    fn basic_ref(&self, address: Address) -> Result<Option<revm::state::AccountInfo>, Self::Error> {
+        self.inner.basic_ref(address)
+    }
+
+    fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        self.inner.code_by_hash_ref(code_hash)
+    }
+
+    fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        self.inner.storage_ref(address, index)
+    }
+
+    fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
+        self.inner.block_hash_ref(number)
+    }
+}
 
 /// Wrapper for blocking async operations in sync contexts.
 ///
@@ -34,7 +87,13 @@ where
         let store = block_on(self.read());
         match block_on(store.get_account(&address))? {
             Some((nonce, balance, code_hash, _gen)) => {
-                Ok(Some(revm::state::AccountInfo { nonce, balance, code_hash, code: None }))
+                Ok(Some(revm::state::AccountInfo {
+                    nonce,
+                    balance,
+                    code_hash,
+                    code: None,
+                    account_id: None,
+                }))
             }
             None => Ok(None),
         }
@@ -66,6 +125,79 @@ where
 
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
         Err(HandleError::BlockHashNotFound(number))
+    }
+}
+
+impl<A, S, C> DatabaseAsyncRef for QmdbHandle<A, S, C>
+where
+    A: QmdbGettable<Key = Address, Value = [u8; AccountEncoding::SIZE]> + Send + Sync + 'static,
+    S: QmdbGettable<Key = StorageKey, Value = U256> + Send + Sync + 'static,
+    C: QmdbGettable<Key = B256, Value = Vec<u8>> + Send + Sync + 'static,
+{
+    type Error = HandleError;
+
+    fn basic_async_ref(
+        &self,
+        address: Address,
+    ) -> impl std::future::Future<Output = Result<Option<revm::state::AccountInfo>, Self::Error>> + Send
+    {
+        let handle = self.clone();
+        async move {
+            let store = handle.read().await;
+            match store.get_account(&address).await? {
+                Some((nonce, balance, code_hash, _gen)) => {
+                Ok(Some(revm::state::AccountInfo {
+                    nonce,
+                    balance,
+                    code_hash,
+                    code: None,
+                    account_id: None,
+                }))
+                }
+                None => Ok(None),
+            }
+        }
+    }
+
+    fn code_by_hash_async_ref(
+        &self,
+        code_hash: B256,
+    ) -> impl std::future::Future<Output = Result<Bytecode, Self::Error>> + Send {
+        let handle = self.clone();
+        async move {
+            if code_hash == KECCAK256_EMPTY || code_hash == B256::ZERO {
+                return Ok(Bytecode::default());
+            }
+            let store = handle.read().await;
+            store.get_code(&code_hash).await?.map_or_else(
+                || Err(HandleError::CodeNotFound(code_hash)),
+                |bytes| Ok(Bytecode::new_raw(Bytes::from(bytes))),
+            )
+        }
+    }
+
+    fn storage_async_ref(
+        &self,
+        address: Address,
+        index: U256,
+    ) -> impl std::future::Future<Output = Result<U256, Self::Error>> + Send {
+        let handle = self.clone();
+        async move {
+            let store = handle.read().await;
+            let generation = match store.get_account(&address).await? {
+                Some((_, _, _, generation)) => generation,
+                None => return Ok(U256::ZERO),
+            };
+            let key = StorageKey::new(address, generation, index);
+            Ok(store.get_storage(&key).await?.unwrap_or(U256::ZERO))
+        }
+    }
+
+    fn block_hash_async_ref(
+        &self,
+        number: u64,
+    ) -> impl std::future::Future<Output = Result<B256, Self::Error>> + Send {
+        std::future::ready(Err(HandleError::BlockHashNotFound(number)))
     }
 }
 

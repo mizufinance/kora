@@ -4,12 +4,9 @@
 //! The harness waits for a fixed number of finalized blocks and asserts all nodes converge on the
 //! same head, state commitment, and balances.
 
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Duration,
-};
+use std::time::Duration;
 
-use alloy_evm::revm::primitives::{B256, U256};
+use alloy_evm::revm::primitives::B256;
 use anyhow::Context as _;
 use commonware_cryptography::ed25519;
 use commonware_p2p::{Manager as _, simulated};
@@ -18,13 +15,14 @@ use commonware_utils::{TryCollect as _, ordered::Set};
 use futures::{StreamExt as _, channel::mpsc};
 
 use crate::{
-    BootstrapConfig, ConsensusDigest, FinalizationEvent,
     application::{
-        NodeEnvironment, ThresholdScheme, TransportControl, start_node, threshold_schemes,
+        NodeEnvironment, ThresholdScheme, TransportContext, TransportControl, start_node,
+        threshold_schemes,
     },
     outcome::SimOutcome,
     config::SimConfig,
 };
+use kora_domain::{BootstrapConfig, ConsensusDigest, FinalizationEvent, StateRoot};
 
 mod demo;
 
@@ -36,18 +34,18 @@ pub(super) const P2P_LINK_LATENCY_MS: u64 = 5;
 
 
 type NodeHandle = crate::application::NodeHandle;
-type SimTransport = simulated::Oracle<ed25519::PublicKey, tokio::Context>;
+type SimTransport = simulated::Oracle<ed25519::PublicKey, TransportContext>;
 
 fn transport_control(
     transport: &SimTransport,
     me: ed25519::PublicKey,
-) -> simulated::Control<ed25519::PublicKey, tokio::Context> {
+) -> simulated::Control<ed25519::PublicKey, TransportContext> {
     simulated::Oracle::control(transport, me)
 }
 
 fn transport_manager(
     transport: &SimTransport,
-) -> simulated::Manager<ed25519::PublicKey, tokio::Context> {
+) -> simulated::Manager<ed25519::PublicKey, TransportContext> {
     simulated::Oracle::manager(transport)
 }
 
@@ -63,8 +61,8 @@ impl<'a> SimEnvironment<'a> {
 }
 
 impl TransportControl for SimTransport {
-    type Control = simulated::Control<ed25519::PublicKey, tokio::Context>;
-    type Manager = simulated::Manager<ed25519::PublicKey, tokio::Context>;
+    type Control = simulated::Control<ed25519::PublicKey, TransportContext>;
+    type Manager = simulated::Manager<ed25519::PublicKey, TransportContext>;
 
     fn control(&self, me: ed25519::PublicKey) -> Self::Control {
         transport_control(self, me)
@@ -109,7 +107,7 @@ fn raise_open_file_limit() {
 fn raise_open_file_limit() {}
 
 /// Run the multi-node simulation and return the final outcome.
-pub fn simulate(cfg: SimConfig) -> anyhow::Result<SimOutcome> {
+pub(crate) fn simulate(cfg: SimConfig) -> anyhow::Result<SimOutcome> {
     raise_open_file_limit();
     // Tokio runtime required for WrapDatabaseAsync in the QMDB adapter.
     let executor = tokio::Runner::default();
@@ -179,15 +177,13 @@ async fn start_network(
     context: &tokio::Context,
     participants: Set<ed25519::PublicKey>,
 ) -> SimTransport {
-    let base_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-    let (network, transport) = simulated::Network::new_with_base_addr(
-        context.with_label("network"),
+    let (network, transport) = simulated::Network::new(
+        TransportContext::new(context.with_label("network")),
         simulated::Config {
             max_size: MAX_MSG_SIZE as u32,
             disconnect_on_block: true,
             tracked_peer_sets: None,
         },
-        base_addr,
     );
     network.start();
 
@@ -266,7 +262,7 @@ async fn assert_all_nodes_converged(
     nodes: &[NodeHandle],
     head: ConsensusDigest,
     demo: &demo::DemoTransfer,
-) -> anyhow::Result<(crate::StateRoot, B256)> {
+) -> anyhow::Result<(StateRoot, B256)> {
     let mut state_root = None;
     let mut seed = None;
     for node in nodes.iter() {

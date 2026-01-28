@@ -1,73 +1,67 @@
-//! Account store backed by commonware-storage.
+//! Account store bindings for commonware-storage.
 
-use std::collections::HashMap;
-
-use alloy_primitives::{Address, B256, keccak256};
+use alloy_primitives::Address;
+use commonware_cryptography::sha256::Digest as QmdbDigest;
+use commonware_storage::kv::Batchable as _;
+use commonware_storage::qmdb::any::VariableConfig;
+use commonware_storage::translator::EightCap;
 use kora_qmdb::{AccountEncoding, QmdbBatchable, QmdbGettable};
-use tokio::sync::RwLock;
 
-use crate::error::BackendError;
+use crate::{
+    BackendError,
+    types::{AccountDb, AccountDbDirty, AccountKey, AccountValue, Context, StoreSlot},
+};
 
-/// Account store backed by commonware-storage.
-///
-/// Uses an in-memory hashmap with keccak256-based root computation.
-/// This is a placeholder implementation that will be replaced with
-/// full commonware QMDB integration when available.
-#[derive(Debug)]
+/// Account partition backed by commonware-storage.
 pub struct AccountStore {
-    /// In-memory storage for accounts.
-    data: RwLock<HashMap<Address, [u8; AccountEncoding::SIZE]>>,
-    /// Cached root hash.
-    root_cache: RwLock<B256>,
+    inner: StoreSlot<AccountDb>,
+}
+
+pub(crate) struct AccountStoreDirty {
+    inner: AccountDbDirty,
 }
 
 impl AccountStore {
-    /// Create a new account store.
-    pub fn new() -> Self {
-        Self { data: RwLock::new(HashMap::new()), root_cache: RwLock::new(B256::ZERO) }
+    /// Initialize the account store.
+    pub async fn init(
+        context: Context,
+        config: VariableConfig<EightCap, ()>,
+    ) -> Result<Self, BackendError> {
+        let inner = AccountDb::init(context, config).await.map_err(|e| {
+            BackendError::Storage(e.to_string())
+        })?;
+        Ok(Self { inner: StoreSlot::new(inner) })
     }
 
-    /// Get the root hash of the account store.
-    pub async fn root(&self) -> Result<B256, BackendError> {
-        Ok(*self.root_cache.read().await)
+    /// Return the current authenticated root for the account partition.
+    pub fn root(&self) -> Result<QmdbDigest, BackendError> {
+        Ok(self.inner.get()?.root())
     }
 
-    /// Compute root from current data.
-    async fn compute_root(&self) -> B256 {
-        let data = self.data.read().await;
-        if data.is_empty() {
-            return B256::ZERO;
-        }
-        // Simple root computation: hash all sorted entries
-        let mut entries: Vec<_> = data.iter().collect();
-        entries.sort_by_key(|(k, _)| **k);
-
-        let mut hasher_input = Vec::new();
-        for (addr, value) in entries {
-            hasher_input.extend_from_slice(addr.as_slice());
-            hasher_input.extend_from_slice(value);
-        }
-        keccak256(&hasher_input)
+    pub(crate) fn into_dirty(self) -> Result<AccountStoreDirty, BackendError> {
+        let inner = self.inner.into_inner()?;
+        Ok(AccountStoreDirty { inner: inner.into_mutable() })
     }
 }
 
-impl Default for AccountStore {
-    fn default() -> Self {
-        Self::new()
+impl AccountStoreDirty {
+    pub(crate) fn root(self) -> QmdbDigest {
+        self.inner.into_merkleized().root()
+    }
+}
+
+impl std::fmt::Debug for AccountStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountStore").finish_non_exhaustive()
     }
 }
 
 /// Error type for account store operations.
-#[derive(Debug)]
-pub struct AccountStoreError(pub String);
+pub type AccountStoreError = BackendError;
 
-impl std::fmt::Display for AccountStoreError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "account store error: {}", self.0)
-    }
+fn account_key(address: Address) -> AccountKey {
+    AccountKey::new(address.into_array())
 }
-
-impl std::error::Error for AccountStoreError {}
 
 impl QmdbGettable for AccountStore {
     type Key = Address;
@@ -75,8 +69,13 @@ impl QmdbGettable for AccountStore {
     type Error = AccountStoreError;
 
     async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
-        let data = self.data.read().await;
-        Ok(data.get(key).copied())
+        let record = self
+            .inner
+            .get()?
+            .get(&account_key(*key))
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        Ok(record.map(|value| value.0))
     }
 }
 
@@ -86,80 +85,52 @@ impl QmdbBatchable for AccountStore {
         I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
         I::IntoIter: Send,
     {
-        let mut data = self.data.write().await;
-
-        for (key, value) in ops {
-            match value {
-                Some(v) => {
-                    data.insert(key, v);
-                }
-                None => {
-                    data.remove(&key);
-                }
-            }
-        }
-        drop(data);
-
-        // Update root cache
-        let new_root = self.compute_root().await;
-        *self.root_cache.write().await = new_root;
-
+        let inner = self.inner.take()?;
+        let mut dirty = inner.into_mutable();
+        let mapped = ops
+            .into_iter()
+            .map(|(address, value)| (account_key(address), value.map(AccountValue)));
+        dirty
+            .write_batch(mapped)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        let merkleized = dirty.into_merkleized();
+        let (inner, _) = merkleized
+            .commit(None)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        self.inner.restore(inner);
         Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use alloy_primitives::U256;
+impl QmdbGettable for AccountStoreDirty {
+    type Key = Address;
+    type Value = [u8; AccountEncoding::SIZE];
+    type Error = AccountStoreError;
 
-    use super::*;
-
-    #[tokio::test]
-    async fn account_store_get_missing() {
-        let store = AccountStore::new();
-        let result = store.get(&Address::ZERO).await.unwrap();
-        assert!(result.is_none());
+    async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
+        let record = self
+            .inner
+            .get(&account_key(*key))
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        Ok(record.map(|value| value.0))
     }
+}
 
-    #[tokio::test]
-    async fn account_store_write_and_get() {
-        let mut store = AccountStore::new();
-        let addr = Address::repeat_byte(0x01);
-        let encoded = AccountEncoding::encode(1, U256::from(1000), B256::ZERO, 0);
-
-        store.write_batch(vec![(addr, Some(encoded))]).await.unwrap();
-
-        let result = store.get(&addr).await.unwrap();
-        assert!(result.is_some());
-        let (nonce, balance, _, _) = AccountEncoding::decode(&result.unwrap()).unwrap();
-        assert_eq!(nonce, 1);
-        assert_eq!(balance, U256::from(1000));
-    }
-
-    #[tokio::test]
-    async fn account_store_delete() {
-        let mut store = AccountStore::new();
-        let addr = Address::repeat_byte(0x01);
-        let encoded = AccountEncoding::encode(1, U256::from(1000), B256::ZERO, 0);
-
-        store.write_batch(vec![(addr, Some(encoded))]).await.unwrap();
-        assert!(store.get(&addr).await.unwrap().is_some());
-
-        store.write_batch(vec![(addr, None)]).await.unwrap();
-        assert!(store.get(&addr).await.unwrap().is_none());
-    }
-
-    #[tokio::test]
-    async fn account_store_root_changes() {
-        let mut store = AccountStore::new();
-        let initial_root = store.root().await.unwrap();
-        assert_eq!(initial_root, B256::ZERO);
-
-        let addr = Address::repeat_byte(0x01);
-        let encoded = AccountEncoding::encode(1, U256::from(1000), B256::ZERO, 0);
-        store.write_batch(vec![(addr, Some(encoded))]).await.unwrap();
-
-        let new_root = store.root().await.unwrap();
-        assert_ne!(new_root, B256::ZERO);
+impl QmdbBatchable for AccountStoreDirty {
+    async fn write_batch<I>(&mut self, ops: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
+        I::IntoIter: Send,
+    {
+        let mapped = ops
+            .into_iter()
+            .map(|(address, value)| (account_key(address), value.map(AccountValue)));
+        self.inner
+            .write_batch(mapped)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))
     }
 }

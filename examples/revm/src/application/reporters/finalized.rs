@@ -8,7 +8,7 @@ use super::super::{
     execution::{evm_env, execute_txs},
     ledger::LedgerService,
 };
-use crate::domain::Block;
+use kora_domain::Block;
 
 /// Helper function for `FinalizedReporter::report` that owns all its inputs.
 async fn handle_finalized_update(

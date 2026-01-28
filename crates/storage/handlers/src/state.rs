@@ -108,11 +108,14 @@ where
         }
     }
 
-    async fn compute_root(&self, _changes: &ChangeSet) -> Result<B256, StateDbError> {
+    async fn compute_root(&self, changes: &ChangeSet) -> Result<B256, StateDbError> {
         // If we have a root provider, use it to compute the root
         if let Some(provider) = self.root_provider() {
             let mut provider = provider.write().await;
-            provider.compute_root().await.map_err(|e| StateDbError::RootComputation(e.to_string()))
+            provider
+                .compute_root(changes)
+                .await
+                .map_err(|e| StateDbError::RootComputation(e.to_string()))
         } else {
             // Return placeholder root when no provider is set
             Ok(StateRoot::compute(B256::ZERO, B256::ZERO, B256::ZERO))

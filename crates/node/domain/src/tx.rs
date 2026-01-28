@@ -4,7 +4,7 @@ use alloy_evm::revm::primitives::{Address, Bytes, U256, keccak256};
 use bytes::{Buf, BufMut};
 use commonware_codec::{Encode, EncodeSize, Error as CodecError, RangeCfg, Read, ReadExt, Write};
 
-use super::ids::TxId;
+use super::TxId;
 
 #[derive(Clone, Copy, Debug)]
 /// Configuration used when decoding transactions from bytes.
@@ -13,11 +13,11 @@ pub struct TxCfg {
     pub max_calldata_bytes: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
 /// Minimal transaction type for the example.
 ///
 /// This is not a signed Ethereum transaction. It is just enough information to build a `TxEnv`
 /// for REVM execution in the simulation.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tx {
     /// Sender address.
     pub from: Address,
@@ -32,6 +32,7 @@ pub struct Tx {
 }
 
 impl Tx {
+    /// Compute the transaction identifier from its encoded contents.
     pub fn id(&self) -> TxId {
         TxId(keccak256(self.encode()))
     }

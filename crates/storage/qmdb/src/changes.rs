@@ -70,19 +70,28 @@ pub struct AccountUpdate {
 impl AccountUpdate {
     /// Merge another update into this one.
     pub fn merge(&mut self, other: Self) {
-        self.nonce = other.nonce;
-        self.balance = other.balance;
-        self.code_hash = other.code_hash;
+        let Self { created, selfdestructed, nonce, balance, code_hash, code, storage } = other;
 
-        if other.code.is_some() {
-            self.code = other.code;
+        if created {
+            self.storage.clear();
+            self.created = true;
         }
 
-        if other.selfdestructed {
-            self.selfdestructed = true;
+        if selfdestructed {
             self.storage.clear();
-        } else {
-            for (slot, value) in other.storage {
+        }
+
+        self.selfdestructed = selfdestructed;
+        self.nonce = nonce;
+        self.balance = balance;
+
+        if self.code_hash != code_hash || code.is_some() {
+            self.code = code;
+        }
+        self.code_hash = code_hash;
+
+        if !selfdestructed {
+            for (slot, value) in storage {
                 self.storage.insert(slot, value);
             }
         }

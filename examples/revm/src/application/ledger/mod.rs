@@ -26,11 +26,8 @@ use mempool::Mempool;
 use seed_cache::SeedCache;
 use snapshot_store::{LedgerSnapshot, SnapshotStore};
 
-use crate::{
-    ConsensusDigest,
-    domain::{Block, LedgerEvent, LedgerEvents, StateRoot, Tx, TxId},
-    qmdb::{QmdbChangeSet, QmdbConfig, QmdbLedger, RevmDb},
-};
+use crate::qmdb::{QmdbChangeSet, QmdbConfig, QmdbLedger, RevmDb};
+use kora_domain::{Block, BlockId, ConsensusDigest, LedgerEvent, LedgerEvents, StateRoot, Tx, TxId};
 #[derive(Clone)]
 /// Ledger view that owns the mutexed execution state.
 pub(crate) struct LedgerView {
@@ -69,7 +66,7 @@ impl LedgerView {
         let genesis_root = qmdb.root().await?;
 
         let genesis_block = Block {
-            parent: crate::BlockId(B256::ZERO),
+            parent: BlockId(B256::ZERO),
             height: 0,
             prevrandao: B256::ZERO,
             state_root: genesis_root,
@@ -336,11 +333,10 @@ mod tests {
 
     use super::{LedgerService, LedgerView, snapshot_store::LedgerSnapshot};
     use crate::{
-        ConsensusDigest,
         application::execution::{evm_env, execute_txs},
-        domain::{Block, Tx},
         qmdb::RevmDb,
     };
+    use kora_domain::{Block, ConsensusDigest, Tx};
 
     static PARTITION_COUNTER: AtomicUsize = AtomicUsize::new(0);
 

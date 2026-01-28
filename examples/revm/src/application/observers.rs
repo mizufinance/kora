@@ -3,7 +3,7 @@ use futures::StreamExt;
 use tracing::{debug, trace};
 
 use super::ledger::LedgerService;
-use crate::domain::LedgerEvent;
+use kora_domain::LedgerEvent;
 
 /// Observers that react to ledger domain events without mutating aggregates.
 pub(crate) struct LedgerObservers;

@@ -10,7 +10,7 @@ use commonware_consensus::{
 use commonware_cryptography::bls12381::primitives::variant::MinSig;
 use commonware_p2p::simulated;
 use commonware_parallel::Sequential;
-use commonware_runtime::{Metrics as _, Spawner as _, tokio};
+use commonware_runtime::{Metrics as _, Spawner as _};
 use commonware_utils::{NZU64, NZUsize};
 use futures::{StreamExt as _, channel::mpsc};
 
@@ -22,15 +22,13 @@ use super::{
     },
     env::{NodeEnvironment, TransportControl},
     marshal::{MarshalStart, start_marshal},
+    TransportContext,
 };
-use crate::{
-    BootstrapConfig, FinalizationEvent,
-    application::{
-        FinalizedReporter, LedgerObservers, LedgerService, LedgerView, NodeHandle, RevmApplication,
-        SeedReporter,
-    },
-    domain::LedgerEvent,
+use crate::application::{
+    FinalizedReporter, LedgerObservers, LedgerService, LedgerView, NodeHandle, RevmApplication,
+    SeedReporter,
 };
+use kora_domain::{BootstrapConfig, FinalizationEvent, LedgerEvent};
 
 /// Initialize and run a single node (QMDB/state + marshal + simplex engine).
 pub(crate) async fn start_node<E>(
@@ -44,8 +42,8 @@ pub(crate) async fn start_node<E>(
 where
     E: NodeEnvironment,
     E::Transport: TransportControl<
-            Control = simulated::Control<Peer, tokio::Context>,
-            Manager = simulated::Manager<Peer, tokio::Context>,
+            Control = simulated::Control<Peer, TransportContext>,
+            Manager = simulated::Manager<Peer, TransportContext>,
         >,
 {
     let context = env.context();

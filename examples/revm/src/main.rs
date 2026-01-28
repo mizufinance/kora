@@ -9,18 +9,6 @@ pub use application::execution::{
     seed_precompile_address,
 };
 
-/// Consensus digest type alias.
-pub type ConsensusDigest = commonware_cryptography::sha256::Digest;
-/// Public key type alias.
-pub type PublicKey = commonware_cryptography::ed25519::PublicKey;
-pub(crate) type FinalizationEvent = (u32, ConsensusDigest);
-
-pub mod domain;
-pub use domain::{
-    AccountChange, Block, BlockCfg, BlockId, BootstrapConfig, StateChanges, StateChangesCfg,
-    StateRoot, Tx, TxCfg, TxId, block_id,
-};
-
 mod cli;
 mod qmdb;
 mod config;
@@ -41,5 +29,6 @@ fn main() {
     };
 
     // Print the output.
-    outcome.expect("success").print();
+    let outcome = outcome.expect("success");
+    println!("{}", outcome);
 }

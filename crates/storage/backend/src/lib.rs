@@ -6,14 +6,16 @@
 mod accounts;
 pub use accounts::{AccountStore, AccountStoreError};
 
+mod types;
+
 mod backend;
-pub use backend::CommonwareBackend;
+pub use backend::{CommonwareBackend, CommonwareRootProvider};
 
 mod code;
 pub use code::{CodeStore, CodeStoreError};
 
 mod config;
-pub use config::{PartitionConfig, QmdbBackendConfig};
+pub use config::QmdbBackendConfig;
 
 mod error;
 pub use error::BackendError;

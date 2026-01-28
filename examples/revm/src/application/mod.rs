@@ -9,10 +9,11 @@ mod observers;
 mod reporters;
 
 pub(crate) use app::RevmApplication;
-pub use handle::NodeHandle;
+pub(crate) use handle::NodeHandle;
 pub(crate) use ledger::{LedgerService, LedgerView};
 pub(crate) use node::{
-    NodeEnvironment, ThresholdScheme, TransportControl, start_node, threshold_schemes,
+    NodeEnvironment, ThresholdScheme, TransportContext, TransportControl, start_node,
+    threshold_schemes,
 };
 pub(crate) use observers::LedgerObservers;
 pub(crate) use reporters::{FinalizedReporter, SeedReporter};

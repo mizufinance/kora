@@ -16,7 +16,11 @@ bench = false
 
 [dependencies]
 # Workspace
+kora-backend.workspace = true
 kora-domain.workspace = true
+kora-handlers.workspace = true
+kora-qmdb.workspace = true
+kora-traits.workspace = true
 
 # Commonware
 commonware-p2p.workspace = true
@@ -38,6 +42,9 @@ anyhow.workspace = true
 tracing.workspace = true
 futures.workspace = true
 thiserror.workspace = true
+governor.workspace = true
+prometheus-client.workspace = true
+tokio.workspace = true
 
 # Execution
 alloy-evm = { workspace = true, features = ["std"] }
