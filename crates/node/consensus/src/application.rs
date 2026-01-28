@@ -1,8 +1,9 @@
 //! Consensus application trait for block proposal and verification.
 
 use alloy_primitives::B256;
+use kora_domain::Block;
 
-use crate::{ConsensusError, Digest, KoraBlock};
+use crate::{ConsensusError, Digest};
 
 /// Application interface for consensus integration.
 ///
@@ -24,9 +25,6 @@ use crate::{ConsensusError, Digest, KoraBlock};
 /// 4. **Seed Updates**: The [`on_seed`](Self::on_seed) callback delivers threshold
 ///    VRF outputs for use in subsequent block prevrandao fields.
 pub trait ConsensusApplication: Clone + Send + Sync + 'static {
-    /// Transaction type for the application.
-    type Tx: Clone + Send + Sync + 'static;
-
     /// Propose a new block during leadership.
     ///
     /// Called when this validator is the leader for a slot. The implementation
@@ -47,7 +45,7 @@ pub trait ConsensusApplication: Clone + Send + Sync + 'static {
     /// - The parent snapshot is not found
     /// - Transaction execution fails
     /// - Block construction fails
-    fn propose(&self, parent: Digest) -> Result<KoraBlock, ConsensusError>;
+    fn propose(&self, parent: Digest) -> Result<Block, ConsensusError>;
 
     /// Verify a block proposed by another validator.
     ///
@@ -69,7 +67,7 @@ pub trait ConsensusApplication: Clone + Send + Sync + 'static {
     /// - The parent snapshot is not found
     /// - Transaction execution fails
     /// - The computed state root does not match the block's state root
-    fn verify(&self, block: &KoraBlock) -> Result<Digest, ConsensusError>;
+    fn verify(&self, block: &Block) -> Result<Digest, ConsensusError>;
 
     /// Handle block finalization.
     ///
@@ -120,15 +118,14 @@ pub trait ConsensusApplicationExt: ConsensusApplication {
     /// # Returns
     ///
     /// The block's digest on successful verification.
-    fn verify_with_seed(
-        &self,
-        block: &KoraBlock,
-        seed: Option<B256>,
-    ) -> Result<Digest, ConsensusError>;
+    fn verify_with_seed(&self, block: &Block, seed: Option<B256>)
+    -> Result<Digest, ConsensusError>;
 }
 
 #[cfg(test)]
 mod tests {
+    use commonware_cryptography::Committable as _;
+
     use super::*;
 
     /// Mock application for testing trait bounds.
@@ -136,14 +133,18 @@ mod tests {
     struct MockApp;
 
     impl ConsensusApplication for MockApp {
-        type Tx = Vec<u8>;
-
-        fn propose(&self, _parent: Digest) -> Result<KoraBlock, ConsensusError> {
-            Ok(KoraBlock::default())
+        fn propose(&self, _parent: Digest) -> Result<Block, ConsensusError> {
+            Ok(Block {
+                parent: kora_domain::BlockId(alloy_primitives::B256::ZERO),
+                height: 0,
+                prevrandao: alloy_primitives::B256::ZERO,
+                state_root: kora_domain::StateRoot(alloy_primitives::B256::ZERO),
+                txs: Vec::new(),
+            })
         }
 
-        fn verify(&self, block: &KoraBlock) -> Result<Digest, ConsensusError> {
-            Ok(block.hash())
+        fn verify(&self, block: &Block) -> Result<Digest, ConsensusError> {
+            Ok(block.commitment())
         }
 
         fn finalize(&self, _digest: Digest) -> Result<(), ConsensusError> {
@@ -156,29 +157,35 @@ mod tests {
     #[test]
     fn mock_app_propose() {
         let app = MockApp;
-        let block = app.propose(B256::ZERO).unwrap();
-        assert_eq!(block.height(), 0);
+        let block = app.propose(Digest::from([0u8; 32])).unwrap();
+        assert_eq!(block.height, 0);
     }
 
     #[test]
     fn mock_app_verify() {
         let app = MockApp;
-        let block = KoraBlock::default();
+        let block = Block {
+            parent: kora_domain::BlockId(alloy_primitives::B256::ZERO),
+            height: 0,
+            prevrandao: alloy_primitives::B256::ZERO,
+            state_root: kora_domain::StateRoot(alloy_primitives::B256::ZERO),
+            txs: Vec::new(),
+        };
         let digest = app.verify(&block).unwrap();
-        assert_eq!(digest, block.hash());
+        assert_eq!(digest, block.commitment());
     }
 
     #[test]
     fn mock_app_finalize() {
         let app = MockApp;
-        let result = app.finalize(B256::ZERO);
+        let result = app.finalize(Digest::from([0u8; 32]));
         assert!(result.is_ok());
     }
 
     #[test]
     fn mock_app_on_seed() {
         let app = MockApp;
-        app.on_seed(B256::ZERO, B256::ZERO);
+        app.on_seed(Digest::from([0u8; 32]), B256::ZERO);
         // No panic means success for this simple test
     }
 }

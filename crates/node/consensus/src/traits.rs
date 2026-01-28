@@ -3,16 +3,17 @@
 use std::collections::BTreeSet;
 
 use alloy_primitives::B256;
+use kora_domain::{ConsensusDigest, StateRoot, Tx, TxId as DomainTxId};
 use kora_qmdb::ChangeSet;
 use kora_traits::StateDb;
 
 use crate::ConsensusError;
 
 /// Transaction identifier type.
-pub type TxId = B256;
+pub type TxId = DomainTxId;
 
 /// Consensus digest type.
-pub type Digest = B256;
+pub type Digest = ConsensusDigest;
 
 /// A snapshot of execution state at a specific block.
 #[derive(Clone, Debug)]
@@ -22,9 +23,11 @@ pub struct Snapshot<S> {
     /// State database at this point.
     pub state: S,
     /// Computed state root.
-    pub state_root: B256,
+    pub state_root: StateRoot,
     /// Pending state changes not yet persisted.
     pub changes: ChangeSet,
+    /// Transaction IDs included in this snapshot's block.
+    pub tx_ids: BTreeSet<TxId>,
 }
 
 impl<S> Snapshot<S> {
@@ -32,10 +35,11 @@ impl<S> Snapshot<S> {
     pub const fn new(
         parent: Option<Digest>,
         state: S,
-        state_root: B256,
+        state_root: StateRoot,
         changes: ChangeSet,
+        tx_ids: BTreeSet<TxId>,
     ) -> Self {
-        Self { parent, state, state_root, changes }
+        Self { parent, state, state_root, changes, tx_ids }
     }
 }
 
@@ -43,19 +47,16 @@ impl<S> Snapshot<S> {
 ///
 /// Implementations may use different ordering strategies (FIFO, priority, etc).
 pub trait Mempool: Clone + Send + Sync + 'static {
-    /// Transaction type stored in the mempool.
-    type Tx: Clone + Send + Sync + 'static;
-
     /// Insert a transaction into the mempool.
     ///
     /// Returns `true` if the transaction was newly inserted.
-    fn insert(&self, tx: Self::Tx) -> bool;
+    fn insert(&self, tx: Tx) -> bool;
 
     /// Build a batch of transactions for inclusion in a block.
     ///
     /// `excluded` contains transaction IDs already included in pending ancestor blocks.
     /// `max_txs` limits the number of transactions returned.
-    fn build(&self, max_txs: usize, excluded: &BTreeSet<TxId>) -> Vec<Self::Tx>;
+    fn build(&self, max_txs: usize, excluded: &BTreeSet<TxId>) -> Vec<Tx>;
 
     /// Remove finalized transactions from the mempool.
     fn prune(&self, tx_ids: &[TxId]);
@@ -115,12 +116,16 @@ pub trait SeedTracker: Clone + Send + Sync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::B256;
+    use kora_domain::StateRoot;
+
     use super::*;
 
     #[test]
     fn snapshot_new() {
-        let snapshot: Snapshot<()> = Snapshot::new(None, (), B256::ZERO, ChangeSet::new());
+        let snapshot: Snapshot<()> =
+            Snapshot::new(None, (), StateRoot(B256::ZERO), ChangeSet::new(), BTreeSet::new());
         assert!(snapshot.parent.is_none());
-        assert_eq!(snapshot.state_root, B256::ZERO);
+        assert_eq!(snapshot.state_root, StateRoot(B256::ZERO));
     }
 }

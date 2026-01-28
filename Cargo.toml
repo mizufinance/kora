@@ -55,6 +55,7 @@ kora-executor = { path = "crates/node/executor" }
 kora-service = { path = "crates/node/service" }
 kora-transport = { path = "crates/network/transport" }
 kora-handlers = { path = "crates/storage/handlers" }
+kora-overlay = { path = "crates/storage/overlay" }
 kora-qmdb = { path = "crates/storage/qmdb" }
 kora-traits = { path = "crates/storage/traits" }
 

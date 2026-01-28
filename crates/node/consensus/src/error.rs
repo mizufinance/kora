@@ -1,18 +1,18 @@
 //! Error types for consensus operations.
 
-use alloy_primitives::B256;
+use kora_domain::{ConsensusDigest, StateRoot};
 use thiserror::Error;
 
 /// Error type for consensus operations.
 #[derive(Debug, Error)]
 pub enum ConsensusError {
     /// Parent block not found.
-    #[error("parent not found: {0}")]
-    ParentNotFound(B256),
+    #[error("parent not found: {0:?}")]
+    ParentNotFound(ConsensusDigest),
 
     /// Snapshot not found for digest.
-    #[error("snapshot not found: {0}")]
-    SnapshotNotFound(B256),
+    #[error("snapshot not found: {0:?}")]
+    SnapshotNotFound(ConsensusDigest),
 
     /// Execution failed.
     #[error("execution failed: {0}")]
@@ -27,11 +27,11 @@ pub enum ConsensusError {
     Validation(String),
 
     /// State root mismatch.
-    #[error("state root mismatch: expected {expected}, got {actual}")]
+    #[error("state root mismatch: expected {expected:?}, got {actual:?}")]
     StateRootMismatch {
         /// Expected state root.
-        expected: B256,
+        expected: StateRoot,
         /// Actual state root.
-        actual: B256,
+        actual: StateRoot,
     },
 }

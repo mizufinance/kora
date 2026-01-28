@@ -53,7 +53,7 @@ mod tests {
     fn seed_tracker_insert_and_get() {
         let tracker = InMemorySeedTracker::empty();
 
-        let digest = B256::repeat_byte(0x01);
+        let digest = Digest::from([0x01u8; 32]);
         let seed = B256::repeat_byte(0x02);
 
         assert!(tracker.get(&digest).is_none());
@@ -64,7 +64,7 @@ mod tests {
 
     #[test]
     fn seed_tracker_genesis() {
-        let genesis = B256::repeat_byte(0xAB);
+        let genesis = Digest::from([0xABu8; 32]);
         let tracker = InMemorySeedTracker::new(genesis);
 
         assert_eq!(tracker.get(&genesis), Some(B256::ZERO));

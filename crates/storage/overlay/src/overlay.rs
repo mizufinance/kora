@@ -1,22 +1,24 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, Bytes, U256};
+use kora_qmdb::ChangeSet;
 use kora_traits::{StateDb, StateDbError, StateDbRead, StateDbWrite};
 
-use crate::qmdb::QmdbChangeSet;
-
+/// State overlay that layers pending changes on top of a base state database.
 #[derive(Clone, Debug)]
-pub(crate) struct OverlayState<S> {
+pub struct OverlayState<S> {
     base: S,
-    changes: Arc<QmdbChangeSet>,
+    changes: Arc<ChangeSet>,
 }
 
 impl<S> OverlayState<S> {
-    pub(crate) fn new(base: S, changes: QmdbChangeSet) -> Self {
+    /// Create a new overlay from a base state and a change set.
+    pub fn new(base: S, changes: ChangeSet) -> Self {
         Self { base, changes: Arc::new(changes) }
     }
 
-    pub(crate) fn merge_changes(&self, newer: QmdbChangeSet) -> QmdbChangeSet {
+    /// Merge the current overlay changes with a newer change set.
+    pub fn merge_changes(&self, newer: ChangeSet) -> ChangeSet {
         let mut merged = (*self.changes).clone();
         merged.merge(newer);
         merged
@@ -24,7 +26,8 @@ impl<S> OverlayState<S> {
 }
 
 impl<S: Clone> OverlayState<S> {
-    pub(crate) fn base(&self) -> S {
+    /// Return a clone of the base state handle.
+    pub fn base(&self) -> S {
         self.base.clone()
     }
 }
@@ -123,7 +126,7 @@ impl<S: StateDbRead> StateDbRead for OverlayState<S> {
 impl<S: StateDbWrite> StateDbWrite for OverlayState<S> {
     fn commit(
         &self,
-        changes: QmdbChangeSet,
+        changes: ChangeSet,
     ) -> impl std::future::Future<Output = Result<B256, StateDbError>> + Send {
         let base = self.base.clone();
         let overlay = Arc::clone(&self.changes);
@@ -136,7 +139,7 @@ impl<S: StateDbWrite> StateDbWrite for OverlayState<S> {
 
     fn compute_root(
         &self,
-        changes: &QmdbChangeSet,
+        changes: &ChangeSet,
     ) -> impl std::future::Future<Output = Result<B256, StateDbError>> + Send {
         let base = self.base.clone();
         let overlay = Arc::clone(&self.changes);
@@ -148,7 +151,7 @@ impl<S: StateDbWrite> StateDbWrite for OverlayState<S> {
         }
     }
 
-    fn merge_changes(&self, older: QmdbChangeSet, newer: QmdbChangeSet) -> QmdbChangeSet {
+    fn merge_changes(&self, older: ChangeSet, newer: ChangeSet) -> ChangeSet {
         self.base.merge_changes(older, newer)
     }
 }

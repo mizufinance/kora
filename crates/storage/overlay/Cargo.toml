@@ -1,0 +1,17 @@
+[package]
+name = "kora-overlay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Overlay state for unpersisted QMDB changes"
+
+[lints]
+workspace = true
+
+[dependencies]
+kora-qmdb = { path = "../qmdb" }
+kora-traits = { path = "../traits" }
+
+alloy-primitives.workspace = true

@@ -6,9 +6,10 @@ use commonware_runtime::{Spawner as _, tokio};
 use commonware_utils::acknowledgement::Acknowledgement as _;
 use kora_domain::Block;
 use kora_executor::{BlockContext, BlockExecutor, RevmExecutor};
+use kora_overlay::OverlayState;
 use tracing::{error, trace, warn};
 
-use super::super::ledger::{LedgerService, OverlayState};
+use super::super::ledger::LedgerService;
 use crate::tx::CHAIN_ID;
 const BLOCK_GAS_LIMIT: u64 = 30_000_000;
 
@@ -75,7 +76,14 @@ async fn handle_finalized_update(
                 }
                 let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
                 state
-                    .insert_snapshot(digest, parent_digest, next_state, state_root, outcome.changes)
+                    .insert_snapshot(
+                        digest,
+                        parent_digest,
+                        next_state,
+                        state_root,
+                        outcome.changes,
+                        &block.txs,
+                    )
                     .await;
             } else {
                 trace!(?digest, "using cached snapshot for finalized block");

@@ -21,9 +21,10 @@ use commonware_runtime::{Clock, Metrics, Spawner};
 use futures::StreamExt as _;
 use kora_domain::{Block, ConsensusDigest, PublicKey, TxId};
 use kora_executor::{BlockContext, BlockExecutor, RevmExecutor};
+use kora_overlay::OverlayState;
 use rand::Rng;
 
-use super::ledger::{LedgerService, LedgerView, OverlayState};
+use super::ledger::{LedgerService, LedgerView};
 use crate::tx::CHAIN_ID;
 const BLOCK_GAS_LIMIT: u64 = 30_000_000;
 
@@ -84,7 +85,14 @@ where
     let digest = child.commitment();
     let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
     state
-        .insert_snapshot(digest, parent_digest, next_state, child.state_root, outcome.changes)
+        .insert_snapshot(
+            digest,
+            parent_digest,
+            next_state,
+            child.state_root,
+            outcome.changes,
+            &child.txs,
+        )
         .await;
     Some(child)
 }
@@ -126,7 +134,9 @@ where
 
     let digest = block.commitment();
     let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
-    state.insert_snapshot(digest, parent_digest, next_state, state_root, outcome.changes).await;
+    state
+        .insert_snapshot(digest, parent_digest, next_state, state_root, outcome.changes, &block.txs)
+        .await;
     true
 }
 

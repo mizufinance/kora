@@ -3,32 +3,32 @@
 use std::collections::BTreeSet;
 
 use alloy_consensus::Header;
-use alloy_primitives::{B256, keccak256};
+use alloy_primitives::{Address, B256, Bytes};
+use commonware_cryptography::Committable as _;
+use kora_domain::{Block, StateRoot, Tx};
 use kora_executor::{BlockContext, BlockExecutor};
 use kora_traits::StateDb;
 
-use crate::{ConsensusError, Digest, KoraBlock, Mempool, Snapshot, SnapshotStore, TxId};
+use crate::{ConsensusError, Digest, Mempool, Snapshot, SnapshotStore, TxId};
+
+const BLOCK_GAS_LIMIT: u64 = 30_000_000;
+
+fn block_context(height: u64, prevrandao: B256) -> BlockContext {
+    let header = Header {
+        number: height,
+        timestamp: height,
+        gas_limit: BLOCK_GAS_LIMIT,
+        beneficiary: Address::ZERO,
+        base_fee_per_gas: Some(0),
+        ..Default::default()
+    };
+    BlockContext::new(header, prevrandao)
+}
 
 /// Builder for constructing block proposals.
 ///
 /// ProposalBuilder coordinates gathering transactions from the mempool,
 /// executing them against parent state, and constructing a complete block.
-///
-/// # Type Parameters
-///
-/// * `S` - State database type implementing [`StateDb`].
-/// * `M` - Mempool type implementing [`Mempool`].
-/// * `SS` - Snapshot store type implementing [`SnapshotStore`].
-/// * `E` - Block executor type implementing [`BlockExecutor`].
-///
-/// # Example
-///
-/// ```ignore
-/// let builder = ProposalBuilder::new(state, mempool, snapshots, executor, chain_id)
-///     .with_max_txs(100);
-///
-/// let (block, snapshot) = builder.build_proposal(parent_digest, prevrandao)?;
-/// ```
 #[derive(Debug)]
 pub struct ProposalBuilder<S, M, SS, E> {
     /// State database for execution.
@@ -41,17 +41,14 @@ pub struct ProposalBuilder<S, M, SS, E> {
     executor: E,
     /// Maximum transactions per block.
     max_txs: usize,
-    /// Chain ID for execution.
-    chain_id: u64,
 }
 
 impl<S, M, SS, E> ProposalBuilder<S, M, SS, E>
 where
     S: StateDb,
     M: Mempool,
-    M::Tx: AsRef<[u8]>,
     SS: SnapshotStore<S>,
-    E: BlockExecutor<S, Tx = M::Tx>,
+    E: BlockExecutor<S, Tx = Bytes>,
 {
     /// Default maximum transactions per block.
     pub const DEFAULT_MAX_TXS: usize = 1000;
@@ -64,9 +61,8 @@ where
     /// * `mempool` - Transaction mempool to pull transactions from.
     /// * `snapshots` - Snapshot store for parent state lookup.
     /// * `executor` - Block executor for transaction execution.
-    /// * `chain_id` - Chain ID for the execution context.
-    pub const fn new(state: S, mempool: M, snapshots: SS, executor: E, chain_id: u64) -> Self {
-        Self { state, mempool, snapshots, executor, max_txs: Self::DEFAULT_MAX_TXS, chain_id }
+    pub const fn new(state: S, mempool: M, snapshots: SS, executor: E) -> Self {
+        Self { state, mempool, snapshots, executor, max_txs: Self::DEFAULT_MAX_TXS }
     }
 
     /// Set the maximum number of transactions per block.
@@ -78,137 +74,71 @@ where
         self
     }
 
-    /// Get the chain ID.
-    pub const fn chain_id(&self) -> u64 {
-        self.chain_id
-    }
-
-    /// Build a block proposal from the given parent.
+    /// Build a block proposal from the given parent block.
     ///
     /// This method:
     /// 1. Retrieves the parent snapshot from the snapshot store.
-    /// 2. Walks the ancestry chain to collect transaction IDs already included
-    ///    in pending (unpersisted) ancestor blocks to avoid duplicates.
-    /// 3. Builds a transaction batch from the mempool excluding those IDs.
-    /// 4. Executes the batch against the parent state.
-    /// 5. Computes the new state root from the execution outcome.
-    /// 6. Constructs a block header with proper fields.
-    /// 7. Returns the complete block and its snapshot for caching.
-    ///
-    /// # Arguments
-    ///
-    /// * `parent_digest` - Digest of the parent block.
-    /// * `prevrandao` - Randomness value for the block (from VRF).
-    ///
-    /// # Returns
-    ///
-    /// A tuple of the constructed block and its snapshot containing the
-    /// execution state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// * The parent snapshot is not found.
-    /// * Ancestor walking fails (missing snapshot in chain).
-    /// * Transaction execution fails.
-    /// * State root computation fails.
+    /// 2. Builds a transaction batch from the mempool, excluding the parent's txs.
+    /// 3. Executes the batch against the parent state.
+    /// 4. Computes the new state root from the execution outcome.
+    /// 5. Constructs and returns the new block and its snapshot.
     pub fn build_proposal(
         &self,
-        parent_digest: Digest,
+        parent: &Block,
         prevrandao: B256,
-    ) -> Result<(KoraBlock, Snapshot<S>), ConsensusError> {
-        // Get parent snapshot
+    ) -> Result<(Block, Snapshot<S>), ConsensusError> {
+        let parent_digest = parent.commitment();
         let parent_snapshot = self
             .snapshots
             .get(&parent_digest)
             .ok_or(ConsensusError::SnapshotNotFound(parent_digest))?;
 
-        // Collect excluded transaction IDs from pending ancestors
         let excluded = self.collect_pending_tx_ids(parent_digest)?;
-
-        // Build transaction batch from mempool
         let txs = self.mempool.build(self.max_txs, &excluded);
 
-        // Compute block number placeholder (actual height should come from parent)
-        let number = parent_snapshot
-            .state_root
-            .as_slice()
-            .iter()
-            .fold(0u64, |acc, &b| acc.wrapping_add(b as u64))
-            .wrapping_add(1);
-
-        // Get current timestamp
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        // Build initial header for execution context
-        let initial_header = Header {
-            parent_hash: parent_digest,
-            number,
-            timestamp,
-            mix_hash: prevrandao,
-            ..Default::default()
-        };
-
-        // Create execution context
-        let context = BlockContext::new(initial_header.clone(), prevrandao);
-
-        // Execute transactions
+        let height = parent.height + 1;
+        let context = block_context(height, prevrandao);
+        let txs_bytes: Vec<Bytes> = txs.iter().map(|tx| tx.bytes.clone()).collect();
         let outcome = self
             .executor
-            .execute(&parent_snapshot.state, &context, &txs)
+            .execute(&parent_snapshot.state, &context, &txs_bytes)
             .map_err(|e| ConsensusError::Execution(e.to_string()))?;
 
-        // Merge changes with ancestor changes and compute state root
         let merged_changes =
             self.snapshots.merged_changes(parent_digest, outcome.changes.clone())?;
         let state_root = futures::executor::block_on(self.state.compute_root(&merged_changes))
             .map_err(ConsensusError::StateDb)?;
+        let state_root = StateRoot(state_root);
 
-        // Build final header with computed values
-        let header = Header { state_root, gas_used: outcome.gas_used, ..initial_header };
-
-        // Encode transactions for block storage
-        let encoded_txs = encode_transactions(&txs);
-
-        // Create block
-        let block = KoraBlock::new(header, encoded_txs, state_root);
-
-        // Create snapshot for caching
-        let snapshot =
-            Snapshot::new(Some(parent_digest), parent_snapshot.state, state_root, outcome.changes);
+        let block = Block { parent: parent.id(), height, prevrandao, state_root, txs };
+        let tx_ids = self.tx_ids_from_block(&block);
+        let snapshot = Snapshot::new(
+            Some(parent_digest),
+            parent_snapshot.state,
+            state_root,
+            outcome.changes,
+            tx_ids,
+        );
 
         Ok((block, snapshot))
     }
 
-    /// Collect transaction IDs from pending (unpersisted) ancestor blocks.
-    ///
-    /// Walks the ancestry chain from the given digest back to the last
-    /// persisted snapshot, collecting all transaction IDs along the way.
-    /// This ensures we don't include duplicate transactions in new blocks.
+    fn tx_ids_from_block(&self, block: &Block) -> BTreeSet<TxId> {
+        block.txs.iter().map(Tx::id).collect()
+    }
+
     fn collect_pending_tx_ids(&self, from: Digest) -> Result<BTreeSet<TxId>, ConsensusError> {
-        let excluded = BTreeSet::new();
+        let mut excluded = BTreeSet::new();
         let mut current = Some(from);
 
         while let Some(digest) = current {
-            // Stop at persisted snapshots
             if self.snapshots.is_persisted(&digest) {
                 break;
             }
 
             let snapshot =
                 self.snapshots.get(&digest).ok_or(ConsensusError::SnapshotNotFound(digest))?;
-
-            // Note: In a full implementation, we would need to track tx IDs
-            // per snapshot. For now, we just walk the chain to establish
-            // the pattern. The actual tx IDs would be stored alongside
-            // the snapshot or in a separate index.
-            //
-            // The excluded set will be populated by higher-level consensus
-            // logic that tracks pending block transactions.
-
+            excluded.extend(snapshot.tx_ids.iter().copied());
             current = snapshot.parent;
         }
 
@@ -216,19 +146,10 @@ where
     }
 }
 
-/// Encode transactions for block storage.
-///
-/// Converts typed transactions into their encoded byte representation.
-fn encode_transactions<T: AsRef<[u8]>>(txs: &[T]) -> Vec<Vec<u8>> {
-    txs.iter().map(|tx| tx.as_ref().to_vec()).collect()
-}
-
-/// Compute the transaction ID for a raw transaction.
-///
-/// The transaction ID is the keccak256 hash of the encoded transaction.
+/// Compute the transaction ID for a transaction.
 #[inline]
-pub fn tx_id(tx: &[u8]) -> TxId {
-    keccak256(tx)
+pub fn tx_id(tx: &Tx) -> TxId {
+    tx.id()
 }
 
 #[cfg(test)]
@@ -309,7 +230,7 @@ mod tests {
 
     #[derive(Clone)]
     struct MockMempool {
-        txs: Arc<RwLock<BTreeMap<TxId, Vec<u8>>>>,
+        txs: Arc<RwLock<BTreeMap<TxId, Tx>>>,
     }
 
     impl MockMempool {
@@ -317,26 +238,24 @@ mod tests {
             Self { txs: Arc::new(RwLock::new(BTreeMap::new())) }
         }
 
-        fn add(&self, tx: Vec<u8>) {
-            let id = keccak256(&tx);
+        fn add(&self, tx: Tx) {
+            let id = tx.id();
             self.txs.write().unwrap().insert(id, tx);
         }
     }
 
     impl Mempool for MockMempool {
-        type Tx = Vec<u8>;
-
-        fn insert(&self, tx: Self::Tx) -> bool {
-            let id = keccak256(&tx);
+        fn insert(&self, tx: Tx) -> bool {
+            let id = tx.id();
             self.txs.write().unwrap().insert(id, tx).is_none()
         }
 
-        fn build(&self, max_txs: usize, excluded: &BTreeSet<TxId>) -> Vec<Self::Tx> {
+        fn build(&self, max_txs: usize, excluded: &BTreeSet<TxId>) -> Vec<Tx> {
             self.txs
                 .read()
                 .unwrap()
                 .iter()
-                .filter(|(id, _)| !excluded.contains(*id))
+                .filter(|(id, _)| !excluded.contains(id))
                 .take(max_txs)
                 .map(|(_, tx)| tx.clone())
                 .collect()
@@ -416,7 +335,7 @@ mod tests {
     struct MockExecutor;
 
     impl BlockExecutor<MockStateDb> for MockExecutor {
-        type Tx = Vec<u8>;
+        type Tx = Bytes;
 
         fn execute(
             &self,
@@ -436,6 +355,20 @@ mod tests {
         }
     }
 
+    fn digest_from_byte(byte: u8) -> Digest {
+        Digest::from([byte; 32])
+    }
+
+    fn parent_block() -> Block {
+        Block {
+            parent: kora_domain::BlockId(B256::ZERO),
+            height: 0,
+            prevrandao: B256::ZERO,
+            state_root: StateRoot(B256::ZERO),
+            txs: Vec::new(),
+        }
+    }
+
     #[test]
     fn proposal_builder_new() {
         let state = MockStateDb::new();
@@ -443,9 +376,8 @@ mod tests {
         let snapshots = MockSnapshotStore::new();
         let executor = MockExecutor;
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor);
         assert_eq!(builder.max_txs, ProposalBuilder::<MockStateDb, MockMempool, MockSnapshotStore, MockExecutor>::DEFAULT_MAX_TXS);
-        assert_eq!(builder.chain_id, 1);
     }
 
     #[test]
@@ -455,7 +387,7 @@ mod tests {
         let snapshots = MockSnapshotStore::new();
         let executor = MockExecutor;
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1).with_max_txs(50);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor).with_max_txs(50);
         assert_eq!(builder.max_txs, 50);
     }
 
@@ -466,10 +398,10 @@ mod tests {
         let snapshots = MockSnapshotStore::new();
         let executor = MockExecutor;
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor);
 
-        let parent = B256::repeat_byte(0x01);
-        let result = builder.build_proposal(parent, B256::ZERO);
+        let parent = parent_block();
+        let result = builder.build_proposal(&parent, B256::ZERO);
 
         assert!(matches!(result, Err(ConsensusError::SnapshotNotFound(_))));
     }
@@ -482,18 +414,25 @@ mod tests {
         let executor = MockExecutor;
 
         // Insert parent snapshot
-        let parent_digest = B256::repeat_byte(0x01);
-        let parent_snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let parent = parent_block();
+        let parent_digest = parent.commitment();
+        let parent_snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
         snapshots.insert(parent_digest, parent_snapshot);
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor);
 
-        let result = builder.build_proposal(parent_digest, B256::ZERO);
+        let result = builder.build_proposal(&parent, B256::ZERO);
         assert!(result.is_ok());
 
         let (block, snapshot) = result.unwrap();
-        assert_eq!(block.tx_count(), 0);
-        assert_eq!(block.parent_hash(), parent_digest);
+        assert_eq!(block.txs.len(), 0);
+        assert_eq!(block.parent, parent.id());
         assert_eq!(snapshot.parent, Some(parent_digest));
     }
 
@@ -505,23 +444,29 @@ mod tests {
         let executor = MockExecutor;
 
         // Add transactions to mempool
-        mempool.add(vec![1, 2, 3]);
-        mempool.add(vec![4, 5, 6]);
+        mempool.add(Tx::new(vec![1, 2, 3].into()));
+        mempool.add(Tx::new(vec![4, 5, 6].into()));
 
         // Insert parent snapshot
-        let parent_digest = B256::repeat_byte(0x01);
-        let parent_snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let parent = parent_block();
+        let parent_digest = parent.commitment();
+        let parent_snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
         snapshots.insert(parent_digest, parent_snapshot);
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor);
 
-        let result = builder.build_proposal(parent_digest, B256::repeat_byte(0xAB));
+        let result = builder.build_proposal(&parent, B256::repeat_byte(0xAB));
         assert!(result.is_ok());
 
         let (block, snapshot) = result.unwrap();
-        assert_eq!(block.tx_count(), 2);
-        assert_eq!(block.header.mix_hash, B256::repeat_byte(0xAB));
-        assert_eq!(block.header.gas_used, 42000); // 2 txs * 21000
+        assert_eq!(block.txs.len(), 2);
+        assert_eq!(block.prevrandao, B256::repeat_byte(0xAB));
         assert!(snapshot.parent.is_some());
     }
 
@@ -534,38 +479,36 @@ mod tests {
 
         // Add many transactions
         for i in 0..100 {
-            mempool.add(vec![i]);
+            mempool.add(Tx::new(vec![i].into()));
         }
 
         // Insert parent snapshot
-        let parent_digest = B256::repeat_byte(0x01);
-        let parent_snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let parent = parent_block();
+        let parent_digest = parent.commitment();
+        let parent_snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
         snapshots.insert(parent_digest, parent_snapshot);
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1).with_max_txs(10);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor).with_max_txs(10);
 
-        let result = builder.build_proposal(parent_digest, B256::ZERO);
+        let result = builder.build_proposal(&parent, B256::ZERO);
         assert!(result.is_ok());
 
         let (block, _) = result.unwrap();
-        assert_eq!(block.tx_count(), 10);
+        assert_eq!(block.txs.len(), 10);
     }
 
     #[test]
     fn tx_id_computation() {
-        let tx = vec![1, 2, 3, 4, 5];
+        let tx = Tx::new(vec![1, 2, 3, 4, 5].into());
         let id = tx_id(&tx);
-        let expected = keccak256(&tx);
+        let expected = tx.id();
         assert_eq!(id, expected);
-    }
-
-    #[test]
-    fn encode_transactions_preserves_data() {
-        let txs = vec![vec![1, 2, 3], vec![4, 5, 6]];
-        let encoded = encode_transactions(&txs);
-        assert_eq!(encoded.len(), 2);
-        assert_eq!(encoded[0], vec![1, 2, 3]);
-        assert_eq!(encoded[1], vec![4, 5, 6]);
     }
 
     #[test]
@@ -576,18 +519,24 @@ mod tests {
         let executor = MockExecutor;
 
         // Insert parent snapshot
-        let parent_digest = B256::repeat_byte(0x01);
-        let parent_snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let parent = parent_block();
+        let parent_digest = parent.commitment();
+        let parent_snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
         snapshots.insert(parent_digest, parent_snapshot);
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor);
 
-        let (block, snapshot) = builder.build_proposal(parent_digest, B256::ZERO).unwrap();
+        let (block, snapshot) = builder.build_proposal(&parent, B256::ZERO).unwrap();
 
         // MockStateDb::compute_root returns B256::repeat_byte(0x42)
-        let expected_root = B256::repeat_byte(0x42);
+        let expected_root = StateRoot(B256::repeat_byte(0x42));
         assert_eq!(block.state_root, expected_root);
-        assert_eq!(block.header.state_root, expected_root);
         assert_eq!(snapshot.state_root, expected_root);
     }
 
@@ -599,20 +548,65 @@ mod tests {
         let executor = MockExecutor;
 
         // Add transactions
-        mempool.add(vec![1]);
-        mempool.add(vec![2]);
-        mempool.add(vec![3]);
+        mempool.add(Tx::new(vec![1].into()));
+        mempool.add(Tx::new(vec![2].into()));
+        mempool.add(Tx::new(vec![3].into()));
 
         // Insert parent snapshot
-        let parent_digest = B256::repeat_byte(0x01);
-        let parent_snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let parent = parent_block();
+        let parent_digest = parent.commitment();
+        let parent_snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
         snapshots.insert(parent_digest, parent_snapshot);
 
-        let builder = ProposalBuilder::new(state, mempool, snapshots, executor, 1);
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor);
 
-        let (block, _) = builder.build_proposal(parent_digest, B256::ZERO).unwrap();
+        let (block, _) = builder.build_proposal(&parent, B256::ZERO).unwrap();
 
-        // MockExecutor returns txs.len() * 21000
-        assert_eq!(block.header.gas_used, 63000);
+        assert_eq!(block.txs.len(), 3);
+    }
+
+    #[test]
+    fn parent_tx_ids_excludes_parent_txs() {
+        let state = MockStateDb::new();
+        let mempool = MockMempool::new();
+        let snapshots = MockSnapshotStore::new();
+        let executor = MockExecutor;
+
+        let tx = Tx::new(vec![9].into());
+        let parent = Block {
+            parent: kora_domain::BlockId(B256::ZERO),
+            height: 0,
+            prevrandao: B256::ZERO,
+            state_root: StateRoot(B256::ZERO),
+            txs: vec![tx.clone()],
+        };
+        let parent_digest = parent.commitment();
+        let parent_snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::from([tx.id()]),
+        );
+        snapshots.insert(parent_digest, parent_snapshot);
+
+        mempool.add(tx);
+
+        let builder = ProposalBuilder::new(state, mempool, snapshots, executor);
+        let result = builder.build_proposal(&parent, B256::ZERO).unwrap();
+
+        assert!(result.0.txs.is_empty());
+    }
+
+    #[test]
+    fn digest_from_byte_helper() {
+        let digest = digest_from_byte(0xAA);
+        assert_eq!(digest_from_byte(0xAA), digest);
     }
 }

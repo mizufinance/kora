@@ -18,8 +18,10 @@ bench = false
 # Workspace
 kora-backend.workspace = true
 kora-domain.workspace = true
+kora-consensus.workspace = true
 kora-executor.workspace = true
 kora-handlers.workspace = true
+kora-overlay.workspace = true
 kora-qmdb.workspace = true
 kora-traits.workspace = true
 

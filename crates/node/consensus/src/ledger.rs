@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use alloy_primitives::B256;
+use kora_domain::{StateRoot, Tx};
 use kora_qmdb::ChangeSet;
 use kora_traits::StateDb;
 
@@ -87,21 +88,11 @@ where
     ///
     /// * `parent` - The parent block digest (or `None` for genesis).
     /// * `max_txs` - Maximum number of transactions to return.
-    /// * `tx_id_fn` - Function to extract a transaction ID from a transaction.
-    ///
     /// # Returns
     ///
     /// A vector of transactions suitable for inclusion in a new block.
-    pub fn build_proposal_txs<F>(
-        &self,
-        parent: Option<Digest>,
-        max_txs: usize,
-        tx_id_fn: F,
-    ) -> Vec<M::Tx>
-    where
-        F: Fn(&M::Tx) -> TxId,
-    {
-        let excluded = self.collect_ancestor_tx_ids(parent, &tx_id_fn);
+    pub fn build_proposal_txs(&self, parent: Option<Digest>, max_txs: usize) -> Vec<Tx> {
+        let excluded = self.collect_ancestor_tx_ids(parent);
         self.mempool.build(max_txs, &excluded)
     }
 
@@ -111,11 +102,23 @@ where
     /// transaction data. Transaction deduplication relies on the mempool's
     /// prune mechanism after finalization.
     #[allow(clippy::missing_const_for_fn)]
-    fn collect_ancestor_tx_ids<F>(&self, _parent: Option<Digest>, _tx_id_fn: &F) -> BTreeSet<TxId>
-    where
-        F: Fn(&M::Tx) -> TxId,
-    {
-        BTreeSet::new()
+    fn collect_ancestor_tx_ids(&self, _parent: Option<Digest>) -> BTreeSet<TxId> {
+        let mut excluded = BTreeSet::new();
+        let mut current = _parent;
+
+        while let Some(digest) = current {
+            if self.snapshots.is_persisted(&digest) {
+                break;
+            }
+
+            let Some(snapshot) = self.snapshots.get(&digest) else {
+                break;
+            };
+            excluded.extend(snapshot.tx_ids.iter().copied());
+            current = snapshot.parent;
+        }
+
+        excluded
     }
 
     /// Get the snapshot for a parent digest.
@@ -171,17 +174,17 @@ where
     ///
     /// Returns an error if a snapshot in the chain is missing or if the
     /// state database commit fails.
-    pub async fn persist_snapshot(&self, digest: Digest) -> Result<B256, ConsensusError> {
+    pub async fn persist_snapshot(&self, digest: Digest) -> Result<StateRoot, ConsensusError> {
         // Get the chain of unpersisted digests and merged changes
         let (chain, merged_changes) = self.snapshots.changes_for_persist(digest)?;
 
         if chain.is_empty() {
             // Already persisted, return current state root
-            return Ok(self.state.state_root().await?);
+            return Ok(StateRoot(self.state.state_root().await?));
         }
 
         // Commit the merged changes to the state database
-        let state_root = self.state.commit(merged_changes).await?;
+        let state_root = StateRoot(self.state.commit(merged_changes).await?);
 
         // Mark all digests in the chain as persisted
         self.snapshots.mark_persisted(&chain);
@@ -211,6 +214,7 @@ where
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
+    use kora_domain::{StateRoot, Tx};
     use kora_qmdb::ChangeSet;
 
     use super::*;
@@ -305,6 +309,10 @@ mod tests {
         LedgerView::new(state, mempool, snapshots, seeds)
     }
 
+    fn digest(byte: u8) -> Digest {
+        Digest::from([byte; 32])
+    }
+
     #[test]
     fn ledger_view_new() {
         let ledger = create_test_ledger();
@@ -337,11 +345,11 @@ mod tests {
         let ledger = create_test_ledger();
 
         // Add some transactions
-        ledger.mempool().insert(vec![1, 2, 3]);
-        ledger.mempool().insert(vec![4, 5, 6]);
+        ledger.mempool().insert(Tx::new(vec![1, 2, 3].into()));
+        ledger.mempool().insert(Tx::new(vec![4, 5, 6].into()));
 
         // Build proposal without parent
-        let txs = ledger.build_proposal_txs(None, 10, |tx| alloy_primitives::keccak256(tx));
+        let txs = ledger.build_proposal_txs(None, 10);
         assert_eq!(txs.len(), 2);
     }
 
@@ -359,7 +367,7 @@ mod tests {
     fn ledger_view_get_parent_snapshot_missing() {
         let ledger = create_test_ledger();
 
-        let digest = B256::repeat_byte(0x01);
+        let digest = digest(0x01);
         let result = ledger.get_parent_snapshot(Some(digest));
         assert!(result.is_err());
 
@@ -373,8 +381,14 @@ mod tests {
     fn ledger_view_get_parent_snapshot_found() {
         let ledger = create_test_ledger();
 
-        let digest = B256::repeat_byte(0x01);
-        let snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let digest = digest(0x01);
+        let snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
 
         ledger.insert_snapshot(digest, snapshot);
 
@@ -387,10 +401,16 @@ mod tests {
     fn ledger_view_insert_snapshot() {
         let ledger = create_test_ledger();
 
-        let digest = B256::repeat_byte(0x01);
+        let digest = digest(0x01);
         assert!(ledger.snapshots().get(&digest).is_none());
 
-        let snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
         ledger.insert_snapshot(digest, snapshot);
 
         assert!(ledger.snapshots().get(&digest).is_some());
@@ -400,7 +420,7 @@ mod tests {
     fn ledger_view_seed_operations() {
         let ledger = create_test_ledger();
 
-        let digest = B256::repeat_byte(0x01);
+        let digest = digest(0x01);
         let seed = B256::repeat_byte(0x02);
 
         // Initially missing
@@ -415,8 +435,14 @@ mod tests {
     async fn ledger_view_persist_snapshot() {
         let ledger = create_test_ledger();
 
-        let digest = B256::repeat_byte(0x01);
-        let snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let digest = digest(0x01);
+        let snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
 
         ledger.insert_snapshot(digest, snapshot);
         assert!(!ledger.is_persisted(&digest));
@@ -431,14 +457,32 @@ mod tests {
     async fn ledger_view_persist_snapshot_chain() {
         let ledger = create_test_ledger();
 
-        let digest1 = B256::repeat_byte(0x01);
-        let digest2 = B256::repeat_byte(0x02);
-        let digest3 = B256::repeat_byte(0x03);
+        let digest1 = digest(0x01);
+        let digest2 = digest(0x02);
+        let digest3 = digest(0x03);
 
         // Create a chain: digest1 -> digest2 -> digest3
-        let snap1 = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
-        let snap2 = Snapshot::new(Some(digest1), MockStateDb::new(), B256::ZERO, ChangeSet::new());
-        let snap3 = Snapshot::new(Some(digest2), MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let snap1 = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
+        let snap2 = Snapshot::new(
+            Some(digest1),
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
+        let snap3 = Snapshot::new(
+            Some(digest2),
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
 
         ledger.insert_snapshot(digest1, snap1);
         ledger.insert_snapshot(digest2, snap2);
@@ -458,8 +502,14 @@ mod tests {
     fn ledger_view_merged_changes() {
         let ledger = create_test_ledger();
 
-        let digest = B256::repeat_byte(0x01);
-        let snapshot = Snapshot::new(None, MockStateDb::new(), B256::ZERO, ChangeSet::new());
+        let digest = digest(0x01);
+        let snapshot = Snapshot::new(
+            None,
+            MockStateDb::new(),
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
 
         ledger.insert_snapshot(digest, snapshot);
 

@@ -10,27 +10,29 @@
 //!
 //! The simulation harness queries this state through `crate::application::NodeHandle`.
 
-mod mempool;
-mod overlay;
-mod seed_cache;
-mod snapshot_store;
-
 use std::{collections::BTreeSet, sync::Arc};
 
 use alloy_evm::revm::primitives::{Address, B256, U256};
 use commonware_cryptography::Committable as _;
-use commonware_runtime::{Metrics, buffer::PoolRef, tokio};
+use commonware_runtime::{Metrics as _, buffer::PoolRef, tokio};
 use futures::{channel::mpsc::UnboundedReceiver, lock::Mutex};
+use kora_consensus::{
+    Mempool as _, SeedTracker as _, Snapshot, SnapshotStore as _,
+    components::{InMemoryMempool, InMemorySeedTracker, InMemorySnapshotStore},
+};
 use kora_domain::{
     Block, BlockId, ConsensusDigest, LedgerEvent, LedgerEvents, StateRoot, Tx, TxId,
 };
+use kora_overlay::OverlayState;
 use kora_traits::StateDbRead;
-use mempool::Mempool;
-pub(crate) use overlay::OverlayState;
-use seed_cache::SeedCache;
-use snapshot_store::{LedgerSnapshot, SnapshotStore};
 
 use crate::qmdb::{QmdbChangeSet, QmdbConfig, QmdbLedger, QmdbState};
+
+type LedgerSnapshot = Snapshot<OverlayState<QmdbState>>;
+
+fn tx_ids(txs: &[Tx]) -> BTreeSet<TxId> {
+    txs.iter().map(Tx::id).collect()
+}
 #[derive(Clone)]
 /// Ledger view that owns the mutexed execution state.
 pub(crate) struct LedgerView {
@@ -43,11 +45,11 @@ pub(crate) struct LedgerView {
 /// Internal ledger state guarded by the mutex inside `LedgerView`.
 pub(crate) struct LedgerState {
     /// Pending transactions that are not yet included in finalized blocks.
-    mempool: Mempool,
+    mempool: InMemoryMempool,
     /// Execution snapshots indexed by digest so we can replay ancestors.
-    snapshots: SnapshotStore,
+    snapshots: InMemorySnapshotStore<OverlayState<QmdbState>>,
     /// Cached seeds for each digest used to compute prevrandao.
-    seeds: SeedCache,
+    seeds: InMemorySeedTracker,
     /// Underlying QMDB ledger service for persistence.
     qmdb: QmdbLedger,
 }
@@ -77,20 +79,22 @@ impl LedgerView {
         };
         let genesis_digest = genesis_block.commitment();
         let state = OverlayState::new(qmdb.state(), QmdbChangeSet::default());
+        let snapshots = InMemorySnapshotStore::new();
+        let genesis_snapshot = Snapshot::new(
+            None,
+            state,
+            genesis_block.state_root,
+            QmdbChangeSet::default(),
+            BTreeSet::new(),
+        );
+        snapshots.insert(genesis_digest, genesis_snapshot);
+        snapshots.mark_persisted(&[genesis_digest]);
 
         Ok(Self {
             inner: Arc::new(Mutex::new(LedgerState {
-                mempool: Mempool::new(),
-                snapshots: SnapshotStore::new(
-                    genesis_digest,
-                    LedgerSnapshot {
-                        parent: None,
-                        state,
-                        state_root: genesis_block.state_root,
-                        qmdb_changes: QmdbChangeSet::default(),
-                    },
-                ),
-                seeds: SeedCache::new(genesis_digest),
+                mempool: InMemoryMempool::new(),
+                snapshots,
+                seeds: InMemorySeedTracker::new(genesis_digest),
                 qmdb,
             })),
             genesis_block,
@@ -102,7 +106,7 @@ impl LedgerView {
     }
 
     pub(crate) async fn submit_tx(&self, tx: Tx) -> bool {
-        let mut inner = self.inner.lock().await;
+        let inner = self.inner.lock().await;
         inner.mempool.insert(tx)
     }
 
@@ -113,7 +117,7 @@ impl LedgerView {
     ) -> Option<U256> {
         let snapshot = {
             let inner = self.inner.lock().await;
-            inner.snapshots.get(&digest).cloned()
+            inner.snapshots.get(&digest)
         }?;
         snapshot.state.balance(&address).await.ok()
     }
@@ -134,13 +138,13 @@ impl LedgerView {
     }
 
     pub(crate) async fn set_seed(&self, digest: ConsensusDigest, seed_hash: B256) {
-        let mut inner = self.inner.lock().await;
+        let inner = self.inner.lock().await;
         inner.seeds.insert(digest, seed_hash);
     }
 
     pub(crate) async fn parent_snapshot(&self, parent: ConsensusDigest) -> Option<LedgerSnapshot> {
         let inner = self.inner.lock().await;
-        inner.snapshots.get(&parent).cloned()
+        inner.snapshots.get(&parent)
     }
 
     pub(crate) async fn insert_snapshot(
@@ -150,12 +154,11 @@ impl LedgerView {
         state: OverlayState<QmdbState>,
         root: StateRoot,
         qmdb_changes: QmdbChangeSet,
+        txs: &[Tx],
     ) {
-        let mut inner = self.inner.lock().await;
-        inner.snapshots.insert(
-            digest,
-            LedgerSnapshot { parent: Some(parent), state, state_root: root, qmdb_changes },
-        );
+        let inner = self.inner.lock().await;
+        let ids = tx_ids(txs);
+        inner.snapshots.insert(digest, Snapshot::new(Some(parent), state, root, qmdb_changes, ids));
     }
 
     /// Compute a preview root as if all unpersisted ancestors plus `changes` were applied.
@@ -183,8 +186,8 @@ impl LedgerView {
     /// persisted or currently being persisted by another task.
     pub(crate) async fn persist_snapshot(&self, digest: ConsensusDigest) -> anyhow::Result<bool> {
         let (changes, qmdb, chain) = {
-            let mut inner = self.inner.lock().await;
-            let (chain, changes) = inner.snapshots.merged_changes_for_persist(digest)?;
+            let inner = self.inner.lock().await;
+            let (chain, changes) = inner.snapshots.changes_for_persist(digest)?;
             if chain.is_empty() {
                 return Ok(false);
             }
@@ -196,11 +199,11 @@ impl LedgerView {
         };
 
         let result = qmdb.commit_changes(changes).await;
-        let mut inner = self.inner.lock().await;
+        let inner = self.inner.lock().await;
         inner.snapshots.clear_persisting_chain(&chain);
         match result {
             Ok(_) => {
-                inner.snapshots.mark_persisted_chain(&chain);
+                inner.snapshots.mark_persisted(&chain);
                 Ok(true)
             }
             Err(err) => Err(err.into()),
@@ -208,8 +211,9 @@ impl LedgerView {
     }
 
     pub(crate) async fn prune_mempool(&self, txs: &[Tx]) {
-        let mut inner = self.inner.lock().await;
-        inner.mempool.prune(txs);
+        let inner = self.inner.lock().await;
+        let tx_ids: Vec<TxId> = txs.iter().map(Tx::id).collect();
+        inner.mempool.prune(&tx_ids);
     }
 
     pub(crate) async fn build_txs(&self, max_txs: usize, excluded: &BTreeSet<TxId>) -> Vec<Tx> {
@@ -288,8 +292,9 @@ impl LedgerService {
         state: OverlayState<QmdbState>,
         root: StateRoot,
         changes: QmdbChangeSet,
+        txs: &[Tx],
     ) {
-        self.view.insert_snapshot(digest, parent, state, root, changes).await;
+        self.view.insert_snapshot(digest, parent, state, root, changes, txs).await;
     }
 
     pub(crate) async fn compute_root(
@@ -328,10 +333,11 @@ mod tests {
     use commonware_runtime::{Runner, buffer::PoolRef, tokio};
     use commonware_utils::{NZU16, NZUsize};
     use k256::ecdsa::SigningKey;
+    use kora_consensus::SnapshotStore as _;
     use kora_domain::{Block, ConsensusDigest, Tx};
     use kora_executor::{BlockContext, BlockExecutor, RevmExecutor};
 
-    use super::{LedgerService, LedgerView, OverlayState, snapshot_store::LedgerSnapshot};
+    use super::{LedgerService, LedgerSnapshot, LedgerView, OverlayState};
     use crate::{
         qmdb::RevmDb,
         tx::{CHAIN_ID, address_from_key, sign_eip1559_transfer},
@@ -439,7 +445,9 @@ mod tests {
             Block { parent: parent.id(), height, prevrandao: PREVRANDAO, state_root: root, txs };
         let digest = block.commitment();
         let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
-        service.insert_snapshot(digest, parent_digest, next_state, root, outcome.changes).await;
+        service
+            .insert_snapshot(digest, parent_digest, next_state, root, outcome.changes, &block.txs)
+            .await;
         BuiltBlock { block, digest }
     }
 

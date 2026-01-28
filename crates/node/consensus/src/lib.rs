@@ -6,9 +6,6 @@
 mod application;
 pub use application::{ConsensusApplication, ConsensusApplicationExt};
 
-mod block;
-pub use block::KoraBlock;
-
 mod error;
 pub use error::ConsensusError;
 

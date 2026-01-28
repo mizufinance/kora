@@ -5,14 +5,14 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use alloy_primitives::{B256, keccak256};
+use kora_domain::Tx;
 
 use crate::traits::{Mempool, TxId};
 
 /// Simple in-memory mempool backed by a BTreeMap.
 #[derive(Debug, Clone)]
 pub struct InMemoryMempool {
-    inner: Arc<RwLock<BTreeMap<TxId, Vec<u8>>>>,
+    inner: Arc<RwLock<BTreeMap<TxId, Tx>>>,
 }
 
 impl InMemoryMempool {
@@ -29,19 +29,17 @@ impl Default for InMemoryMempool {
 }
 
 impl Mempool for InMemoryMempool {
-    type Tx = Vec<u8>;
-
-    fn insert(&self, tx: Self::Tx) -> bool {
-        let id = keccak256(&tx);
+    fn insert(&self, tx: Tx) -> bool {
+        let id = tx.id();
         let mut inner = self.inner.write().unwrap();
         inner.insert(id, tx).is_none()
     }
 
-    fn build(&self, max_txs: usize, excluded: &std::collections::BTreeSet<B256>) -> Vec<Self::Tx> {
+    fn build(&self, max_txs: usize, excluded: &std::collections::BTreeSet<TxId>) -> Vec<Tx> {
         let inner = self.inner.read().unwrap();
         inner
             .iter()
-            .filter(|(id, _)| !excluded.contains(*id))
+            .filter(|(id, _)| !excluded.contains(id))
             .take(max_txs)
             .map(|(_, tx)| tx.clone())
             .collect()
@@ -67,8 +65,8 @@ mod tests {
     fn mempool_insert_and_build() {
         let mempool = InMemoryMempool::new();
 
-        let tx1 = vec![1, 2, 3];
-        let tx2 = vec![4, 5, 6];
+        let tx1 = Tx::new(vec![1, 2, 3].into());
+        let tx2 = Tx::new(vec![4, 5, 6].into());
 
         assert!(mempool.insert(tx1.clone()));
         assert!(mempool.insert(tx2));
@@ -84,8 +82,8 @@ mod tests {
     fn mempool_prune() {
         let mempool = InMemoryMempool::new();
 
-        let tx = vec![1, 2, 3];
-        let id = keccak256(&tx);
+        let tx = Tx::new(vec![1, 2, 3].into());
+        let id = tx.id();
 
         mempool.insert(tx);
         assert_eq!(mempool.len(), 1);
@@ -98,9 +96,9 @@ mod tests {
     fn mempool_build_with_exclusions() {
         let mempool = InMemoryMempool::new();
 
-        let tx1 = vec![1, 2, 3];
-        let tx2 = vec![4, 5, 6];
-        let id1 = keccak256(&tx1);
+        let tx1 = Tx::new(vec![1, 2, 3].into());
+        let tx2 = Tx::new(vec![4, 5, 6].into());
+        let id1 = tx1.id();
 
         mempool.insert(tx1);
         mempool.insert(tx2.clone());

@@ -18,11 +18,16 @@ use crate::{
 pub struct InMemorySnapshotStore<S> {
     snapshots: Arc<RwLock<BTreeMap<Digest, Snapshot<S>>>>,
     persisted: Arc<RwLock<BTreeSet<Digest>>>,
+    persisting: Arc<RwLock<BTreeSet<Digest>>>,
 }
 
 impl<S> Clone for InMemorySnapshotStore<S> {
     fn clone(&self) -> Self {
-        Self { snapshots: Arc::clone(&self.snapshots), persisted: Arc::clone(&self.persisted) }
+        Self {
+            snapshots: Arc::clone(&self.snapshots),
+            persisted: Arc::clone(&self.persisted),
+            persisting: Arc::clone(&self.persisting),
+        }
     }
 }
 
@@ -32,6 +37,32 @@ impl<S> InMemorySnapshotStore<S> {
         Self {
             snapshots: Arc::new(RwLock::new(BTreeMap::new())),
             persisted: Arc::new(RwLock::new(BTreeSet::new())),
+            persisting: Arc::new(RwLock::new(BTreeSet::new())),
+        }
+    }
+}
+
+impl<S> InMemorySnapshotStore<S> {
+    /// Returns true if every digest in the chain is neither persisted nor in-flight.
+    pub fn can_persist_chain(&self, chain: &[Digest]) -> bool {
+        let persisted = self.persisted.read().unwrap();
+        let persisting = self.persisting.read().unwrap();
+        chain.iter().all(|digest| !persisted.contains(digest) && !persisting.contains(digest))
+    }
+
+    /// Mark a chain as being persisted.
+    pub fn mark_persisting_chain(&self, chain: &[Digest]) {
+        let mut persisting = self.persisting.write().unwrap();
+        for digest in chain {
+            persisting.insert(*digest);
+        }
+    }
+
+    /// Clear the in-flight markers for a chain.
+    pub fn clear_persisting_chain(&self, chain: &[Digest]) {
+        let mut persisting = self.persisting.write().unwrap();
+        for digest in chain {
+            persisting.remove(digest);
         }
     }
 }
@@ -134,7 +165,10 @@ impl<S: StateDb> SnapshotStore<S> for InMemorySnapshotStore<S> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use alloy_primitives::B256;
+    use kora_domain::StateRoot;
 
     use super::*;
 
@@ -208,8 +242,14 @@ mod tests {
     fn snapshot_store_insert_and_get() {
         let store = InMemorySnapshotStore::<MockStateDb>::new();
 
-        let digest = B256::repeat_byte(0x01);
-        let snapshot = Snapshot::new(None, MockStateDb, B256::ZERO, ChangeSet::new());
+        let digest = Digest::from([0x01u8; 32]);
+        let snapshot = Snapshot::new(
+            None,
+            MockStateDb,
+            StateRoot(B256::ZERO),
+            ChangeSet::new(),
+            BTreeSet::new(),
+        );
 
         assert!(store.get(&digest).is_none());
 
@@ -221,10 +261,27 @@ mod tests {
     fn snapshot_store_persisted() {
         let store = InMemorySnapshotStore::<MockStateDb>::new();
 
-        let digest = B256::repeat_byte(0x01);
+        let digest = Digest::from([0x01u8; 32]);
         assert!(!store.is_persisted(&digest));
 
         store.mark_persisted(&[digest]);
         assert!(store.is_persisted(&digest));
+    }
+
+    #[test]
+    fn snapshot_store_persisting_guard() {
+        let store = InMemorySnapshotStore::<MockStateDb>::new();
+
+        let digest = Digest::from([0x02u8; 32]);
+        assert!(store.can_persist_chain(&[digest]));
+
+        store.mark_persisting_chain(&[digest]);
+        assert!(!store.can_persist_chain(&[digest]));
+
+        store.clear_persisting_chain(&[digest]);
+        assert!(store.can_persist_chain(&[digest]));
+
+        store.mark_persisted(&[digest]);
+        assert!(!store.can_persist_chain(&[digest]));
     }
 }

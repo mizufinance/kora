@@ -10,13 +10,16 @@ description = "Consensus application layer for Kora"
 [dependencies]
 # Local crates
 kora-executor = { path = "../executor" }
+kora-domain = { path = "../domain" }
 kora-traits = { path = "../../storage/traits" }
 kora-qmdb = { path = "../../storage/qmdb" }
 
 # Alloy
 alloy-primitives.workspace = true
 alloy-consensus.workspace = true
-alloy-rlp.workspace = true
+
+# Commonware
+commonware-cryptography.workspace = true
 
 # Error handling
 thiserror.workspace = true

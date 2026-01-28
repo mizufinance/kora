@@ -11,7 +11,7 @@ using trait-abstracted components for modularity.
 ## Key Types
 
 - `ConsensusApplication` - Implements Commonware's Application trait
-- `KoraBlock` - Block type using alloy types
+- `Block` - Commonware-compatible block type from `kora-domain`
 - `ExecutionOutcome` - Result of block execution
 
 ## Traits
