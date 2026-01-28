@@ -365,12 +365,15 @@ mod tests {
     use commonware_utils::{NZU16, NZUsize};
     use k256::ecdsa::SigningKey;
     use kora_consensus::SnapshotStore as _;
-    use kora_domain::{Block, ConsensusDigest, Tx};
+    use kora_domain::{
+        Block, ConsensusDigest, Tx,
+        evm::{address_from_key, sign_eip1559_transfer},
+    };
     use kora_executor::{BlockContext, BlockExecutor, RevmExecutor};
     use kora_qmdb_ledger::QmdbRefDb;
 
     use super::{LedgerService, LedgerSnapshot, LedgerView, OverlayState};
-    use crate::tx::{CHAIN_ID, address_from_key, sign_eip1559_transfer};
+    use crate::chain::CHAIN_ID;
 
     type RevmDb = CacheDB<QmdbRefDb>;
 
@@ -420,7 +423,7 @@ mod tests {
     }
 
     fn transfer_tx(from_key: &SigningKey, to: Address, value: u64, nonce: u64) -> Tx {
-        sign_eip1559_transfer(from_key, to, U256::from(value), nonce, GAS_LIMIT_TRANSFER)
+        sign_eip1559_transfer(from_key, CHAIN_ID, to, U256::from(value), nonce, GAS_LIMIT_TRANSFER)
     }
 
     fn block_context(height: u64, prevrandao: B256) -> BlockContext {

@@ -23,3 +23,6 @@ pub use idents::{BlockId, StateRoot, TxId, read_b256, write_b256};
 
 mod tx;
 pub use tx::{Tx, TxCfg};
+
+#[cfg(feature = "evm")]
+pub mod evm;

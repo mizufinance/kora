@@ -4,12 +4,12 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 mod application;
+mod chain;
 mod cli;
 mod config;
 mod demo;
 mod outcome;
 mod simulation;
-mod tx;
 
 fn main() {
     use clap::Parser;

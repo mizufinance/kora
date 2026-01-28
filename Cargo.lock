@@ -3163,13 +3163,17 @@ dependencies = [
 name = "kora-domain"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
  "alloy-evm",
  "alloy-primitives",
+ "alloy-rlp",
  "bytes",
  "commonware-codec",
  "commonware-consensus",
  "commonware-cryptography",
  "futures",
+ "k256",
+ "sha3",
 ]
 
 [[package]]
@@ -3267,7 +3271,6 @@ dependencies = [
  "alloy-consensus",
  "alloy-evm",
  "alloy-primitives",
- "alloy-rlp",
  "anyhow",
  "clap",
  "commonware-broadcast",
@@ -3291,7 +3294,6 @@ dependencies = [
  "libc",
  "prometheus-client",
  "rand 0.8.5",
- "sha3",
  "tracing",
 ]
 

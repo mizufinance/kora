@@ -3,9 +3,13 @@
 //! The example chain "prefunds" two addresses and injects a single transfer at height 1.
 
 use alloy_primitives::{Address, U256};
-use kora_domain::Tx;
+use k256::ecdsa::SigningKey;
+use kora_domain::{
+    Tx,
+    evm::{address_from_key, sign_eip1559_transfer},
+};
 
-use crate::tx::{address_from_key, receiver_key, sender_key, sign_eip1559_transfer};
+use crate::chain::CHAIN_ID;
 #[derive(Clone, Debug)]
 pub(super) struct DemoTransfer {
     pub(super) from: Address,
@@ -22,7 +26,7 @@ impl DemoTransfer {
         let receiver = receiver_key();
         let from = address_from_key(&sender);
         let to = address_from_key(&receiver);
-        let tx = sign_eip1559_transfer(&sender, to, U256::from(100u64), 0, 21_000);
+        let tx = sign_eip1559_transfer(&sender, CHAIN_ID, to, U256::from(100u64), 0, 21_000);
 
         Self {
             from,
@@ -33,4 +37,12 @@ impl DemoTransfer {
             expected_to: U256::from(100u64),
         }
     }
+}
+
+fn sender_key() -> SigningKey {
+    SigningKey::from_bytes(&[1u8; 32].into()).expect("valid sender key")
+}
+
+fn receiver_key() -> SigningKey {
+    SigningKey::from_bytes(&[2u8; 32].into()).expect("valid receiver key")
 }

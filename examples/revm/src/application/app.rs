@@ -26,7 +26,7 @@ use kora_overlay::OverlayState;
 use rand::Rng;
 
 use super::ledger::{LedgerService, LedgerView};
-use crate::tx::CHAIN_ID;
+use crate::chain::CHAIN_ID;
 const BLOCK_GAS_LIMIT: u64 = 30_000_000;
 
 fn block_context(height: u64, prevrandao: B256) -> BlockContext {

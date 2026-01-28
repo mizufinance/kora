@@ -16,7 +16,7 @@ bench = false
 
 [dependencies]
 # Workspace
-kora-domain.workspace = true
+kora-domain = { workspace = true, features = ["evm"] }
 kora-consensus.workspace = true
 kora-executor.workspace = true
 kora-overlay.workspace = true
@@ -48,6 +48,4 @@ prometheus-client.workspace = true
 alloy-evm = { workspace = true, features = ["std"] }
 alloy-consensus.workspace = true
 alloy-primitives.workspace = true
-alloy-rlp.workspace = true
-k256 = "0.13"
-sha3 = "0.10"
+k256.workspace = true

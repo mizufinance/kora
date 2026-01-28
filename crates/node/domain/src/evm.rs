@@ -1,38 +1,32 @@
+//! EVM-oriented transaction helpers.
+
 use alloy_consensus::{SignableTransaction as _, TxEip1559, TxEnvelope};
 use alloy_primitives::{Address, Bytes, Signature, TxKind, U256, keccak256};
 use k256::ecdsa::SigningKey;
-use kora_domain::Tx;
 use sha3::{Digest as _, Keccak256};
 
-pub(crate) const CHAIN_ID: u64 = 1337;
+use crate::Tx;
 
-const SENDER_KEY_BYTES: [u8; 32] = [1u8; 32];
-const RECEIVER_KEY_BYTES: [u8; 32] = [2u8; 32];
-
-pub(crate) fn sender_key() -> SigningKey {
-    SigningKey::from_bytes(&SENDER_KEY_BYTES.into()).expect("valid sender key")
-}
-
-pub(crate) fn receiver_key() -> SigningKey {
-    SigningKey::from_bytes(&RECEIVER_KEY_BYTES.into()).expect("valid receiver key")
-}
-
-pub(crate) fn address_from_key(key: &SigningKey) -> Address {
+/// Derive an Ethereum address from a secp256k1 signing key.
+pub fn address_from_key(key: &SigningKey) -> Address {
     let encoded = key.verifying_key().to_encoded_point(false);
     let pubkey = encoded.as_bytes();
     let hash = keccak256(&pubkey[1..]);
     Address::from_slice(&hash[12..])
 }
 
-pub(crate) fn sign_eip1559_transfer(
+/// Sign a simple EIP-1559 transfer transaction and return its encoded bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn sign_eip1559_transfer(
     key: &SigningKey,
+    chain_id: u64,
     to: Address,
     value: U256,
     nonce: u64,
     gas_limit: u64,
 ) -> Tx {
     let tx = TxEip1559 {
-        chain_id: CHAIN_ID,
+        chain_id,
         nonce,
         gas_limit,
         max_fee_per_gas: 0,
