@@ -2,9 +2,7 @@
 
 use alloy_primitives::B256;
 use commonware_cryptography::sha256::Digest as QmdbDigest;
-use commonware_storage::kv::Batchable as _;
-use commonware_storage::qmdb::any::VariableConfig;
-use commonware_storage::translator::EightCap;
+use commonware_storage::{kv::Batchable as _, qmdb::any::VariableConfig, translator::EightCap};
 use kora_qmdb::{QmdbBatchable, QmdbGettable};
 
 use crate::{
@@ -27,9 +25,9 @@ impl CodeStore {
         context: Context,
         config: VariableConfig<EightCap, (commonware_codec::RangeCfg<usize>, ())>,
     ) -> Result<Self, BackendError> {
-        let inner = CodeDb::init(context, config).await.map_err(|e| {
-            BackendError::Storage(e.to_string())
-        })?;
+        let inner = CodeDb::init(context, config)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
         Ok(Self { inner: StoreSlot::new(inner) })
     }
 
@@ -86,15 +84,10 @@ impl QmdbBatchable for CodeStore {
         let inner = self.inner.take()?;
         let mut dirty = inner.into_mutable();
         let mapped = ops.into_iter().map(|(hash, value)| (code_key(hash), value));
-        dirty
-            .write_batch(mapped)
-            .await
-            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        dirty.write_batch(mapped).await.map_err(|e| BackendError::Storage(e.to_string()))?;
         let merkleized = dirty.into_merkleized();
-        let (inner, _) = merkleized
-            .commit(None)
-            .await
-            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        let (inner, _) =
+            merkleized.commit(None).await.map_err(|e| BackendError::Storage(e.to_string()))?;
         self.inner.restore(inner);
         Ok(())
     }
@@ -106,10 +99,7 @@ impl QmdbGettable for CodeStoreDirty {
     type Error = CodeStoreError;
 
     async fn get(&self, key: &Self::Key) -> Result<Option<Self::Value>, Self::Error> {
-        self.inner
-            .get(&code_key(*key))
-            .await
-            .map_err(|e| BackendError::Storage(e.to_string()))
+        self.inner.get(&code_key(*key)).await.map_err(|e| BackendError::Storage(e.to_string()))
     }
 }
 
@@ -120,9 +110,6 @@ impl QmdbBatchable for CodeStoreDirty {
         I::IntoIter: Send,
     {
         let mapped = ops.into_iter().map(|(hash, value)| (code_key(hash), value));
-        self.inner
-            .write_batch(mapped)
-            .await
-            .map_err(|e| BackendError::Storage(e.to_string()))
+        self.inner.write_batch(mapped).await.map_err(|e| BackendError::Storage(e.to_string()))
     }
 }

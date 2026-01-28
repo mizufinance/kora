@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use alloy_evm::revm::primitives::B256;
-
 use kora_domain::ConsensusDigest;
 
 #[derive(Clone)]

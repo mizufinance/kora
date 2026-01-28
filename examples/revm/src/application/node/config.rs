@@ -11,10 +11,10 @@ use commonware_cryptography::{
 use commonware_p2p::simulated;
 use commonware_runtime::{Quota, buffer::PoolRef};
 use commonware_utils::{N3f1, NZU16, NZU32, NZUsize, TryCollect as _, ordered::Set};
+use kora_domain::{BlockCfg, PublicKey, TxCfg};
 use rand::{SeedableRng as _, rngs::StdRng};
 
 use super::TransportContext;
-use kora_domain::{BlockCfg, PublicKey, TxCfg};
 
 pub(crate) type ThresholdScheme = bls12381_threshold::Scheme<PublicKey, MinSig>;
 

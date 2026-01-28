@@ -11,12 +11,12 @@ use commonware_parallel::Sequential;
 use commonware_runtime::{Metrics as _, buffer::PoolRef, tokio};
 use commonware_storage::archive::immutable;
 use commonware_utils::{NZU64, NZUsize, acknowledgement::Exact};
+use kora_domain::{Block, BlockCfg};
 
 use super::config::{
     ChannelReceiver, ChannelSender, EPOCH_LENGTH, MAILBOX_SIZE, Peer, ThresholdScheme,
 };
 use crate::application::FinalizedReporter;
-use kora_domain::{Block, BlockCfg};
 
 #[derive(Clone)]
 struct ConstantSchemeProvider(Arc<ThresholdScheme>);
@@ -180,27 +180,28 @@ where
     .context("init blocks archive")?;
 
     let epocher = FixedEpocher::new(NZU64!(EPOCH_LENGTH));
-    let (actor, mailbox, _last_processed_height) = marshal::Actor::<_, _, _, _, _, _, _, Exact>::init(
-        ctx.clone(),
-        finalizations_by_height,
-        finalized_blocks,
-        marshal::Config {
-            provider: scheme_provider,
-            epocher,
-            partition_prefix,
-            mailbox_size: MAILBOX_SIZE,
-            view_retention_timeout: commonware_consensus::types::ViewDelta::new(10),
-            prunable_items_per_section: NZU64!(10),
-            buffer_pool,
-            replay_buffer: NZUsize!(1024 * 1024),
-            key_write_buffer: NZUsize!(1024 * 1024),
-            value_write_buffer: NZUsize!(1024 * 1024),
-            block_codec_config,
-            max_repair: NZUsize!(16),
-            strategy: Sequential,
-        },
-    )
-    .await;
+    let (actor, mailbox, _last_processed_height) =
+        marshal::Actor::<_, _, _, _, _, _, _, Exact>::init(
+            ctx.clone(),
+            finalizations_by_height,
+            finalized_blocks,
+            marshal::Config {
+                provider: scheme_provider,
+                epocher,
+                partition_prefix,
+                mailbox_size: MAILBOX_SIZE,
+                view_retention_timeout: commonware_consensus::types::ViewDelta::new(10),
+                prunable_items_per_section: NZU64!(10),
+                buffer_pool,
+                replay_buffer: NZUsize!(1024 * 1024),
+                key_write_buffer: NZUsize!(1024 * 1024),
+                value_write_buffer: NZUsize!(1024 * 1024),
+                block_codec_config,
+                max_repair: NZUsize!(16),
+                strategy: Sequential,
+            },
+        )
+        .await;
     actor.start(application, buffer, resolver);
     Ok(mailbox)
 }

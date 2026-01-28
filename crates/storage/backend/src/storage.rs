@@ -2,14 +2,14 @@
 
 use alloy_primitives::U256;
 use commonware_cryptography::sha256::Digest as QmdbDigest;
-use commonware_storage::kv::Batchable as _;
-use commonware_storage::qmdb::any::VariableConfig;
-use commonware_storage::translator::EightCap;
+use commonware_storage::{kv::Batchable as _, qmdb::any::VariableConfig, translator::EightCap};
 use kora_qmdb::{QmdbBatchable, QmdbGettable, StorageKey};
 
 use crate::{
     BackendError,
-    types::{Context, StorageDb, StorageDbDirty, StorageKey as StorageKeyBytes, StorageValue, StoreSlot},
+    types::{
+        Context, StorageDb, StorageDbDirty, StorageKey as StorageKeyBytes, StorageValue, StoreSlot,
+    },
 };
 
 /// Storage partition backed by commonware-storage.
@@ -27,9 +27,9 @@ impl StorageStore {
         context: Context,
         config: VariableConfig<EightCap, ()>,
     ) -> Result<Self, BackendError> {
-        let inner = StorageDb::init(context, config).await.map_err(|e| {
-            BackendError::Storage(e.to_string())
-        })?;
+        let inner = StorageDb::init(context, config)
+            .await
+            .map_err(|e| BackendError::Storage(e.to_string()))?;
         Ok(Self { inner: StoreSlot::new(inner) })
     }
 
@@ -87,18 +87,12 @@ impl QmdbBatchable for StorageStore {
     {
         let inner = self.inner.take()?;
         let mut dirty = inner.into_mutable();
-        let mapped = ops
-            .into_iter()
-            .map(|(key, value)| (storage_key(key), value.map(StorageValue)));
-        dirty
-            .write_batch(mapped)
-            .await
-            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        let mapped =
+            ops.into_iter().map(|(key, value)| (storage_key(key), value.map(StorageValue)));
+        dirty.write_batch(mapped).await.map_err(|e| BackendError::Storage(e.to_string()))?;
         let merkleized = dirty.into_merkleized();
-        let (inner, _) = merkleized
-            .commit(None)
-            .await
-            .map_err(|e| BackendError::Storage(e.to_string()))?;
+        let (inner, _) =
+            merkleized.commit(None).await.map_err(|e| BackendError::Storage(e.to_string()))?;
         self.inner.restore(inner);
         Ok(())
     }
@@ -125,12 +119,8 @@ impl QmdbBatchable for StorageStoreDirty {
         I: IntoIterator<Item = (Self::Key, Option<Self::Value>)> + Send,
         I::IntoIter: Send,
     {
-        let mapped = ops
-            .into_iter()
-            .map(|(key, value)| (storage_key(key), value.map(StorageValue)));
-        self.inner
-            .write_batch(mapped)
-            .await
-            .map_err(|e| BackendError::Storage(e.to_string()))
+        let mapped =
+            ops.into_iter().map(|(key, value)| (storage_key(key), value.map(StorageValue)));
+        self.inner.write_batch(mapped).await.map_err(|e| BackendError::Storage(e.to_string()))
     }
 }

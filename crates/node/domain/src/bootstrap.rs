@@ -1,7 +1,8 @@
 //! Boostrap configuration.
 
-use crate::Tx;
 use alloy_evm::revm::primitives::{Address, U256};
+
+use crate::Tx;
 
 /// Genesis allocation plus bootstrap transactions applied before consensus starts.
 ///

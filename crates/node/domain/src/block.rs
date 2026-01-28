@@ -5,7 +5,7 @@ use bytes::{Buf, BufMut};
 use commonware_codec::{Encode, EncodeSize, Error as CodecError, RangeCfg, Read, ReadExt, Write};
 use commonware_cryptography::{Committable, Digestible, Hasher as _, Sha256};
 
-use crate::{BlockId, StateRoot, read_b256, write_b256, Tx, TxCfg};
+use crate::{BlockId, StateRoot, Tx, TxCfg, read_b256, write_b256};
 
 #[derive(Clone, Copy, Debug)]
 /// Configuration used when decoding blocks and their transactions.

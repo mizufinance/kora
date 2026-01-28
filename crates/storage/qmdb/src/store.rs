@@ -121,8 +121,11 @@ where
             };
 
             // Increment generation on recreate or selfdestruct to invalidate old storage.
-            let new_gen =
-                if update.created || update.selfdestructed { current_gen.saturating_add(1) } else { current_gen };
+            let new_gen = if update.created || update.selfdestructed {
+                current_gen.saturating_add(1)
+            } else {
+                current_gen
+            };
 
             if update.selfdestructed {
                 batches.accounts.push((*address, None));

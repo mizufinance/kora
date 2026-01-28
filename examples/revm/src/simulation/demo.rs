@@ -19,13 +19,8 @@ impl DemoTransfer {
     pub(super) fn new() -> Self {
         let from = Address::from([0x11u8; 20]);
         let to = Address::from([0x22u8; 20]);
-        let tx = Tx {
-            from,
-            to,
-            value: U256::from(100u64),
-            gas_limit: 21_000,
-            data: EvmBytes::new(),
-        };
+        let tx =
+            Tx { from, to, value: U256::from(100u64), gas_limit: 21_000, data: EvmBytes::new() };
 
         Self {
             from,

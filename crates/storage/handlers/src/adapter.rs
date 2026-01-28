@@ -11,8 +11,7 @@ use kora_qmdb::{AccountEncoding, ChangeSet, QmdbBatchable, QmdbGettable, Storage
 use revm::{
     bytecode::Bytecode,
     database_interface::{
-        DatabaseCommit,
-        DatabaseRef,
+        DatabaseCommit, DatabaseRef,
         async_db::{DatabaseAsyncRef, WrapDatabaseAsync},
     },
     primitives::HashMap,
@@ -25,9 +24,14 @@ use crate::{error::HandleError, qmdb::QmdbHandle};
 ///
 /// This adapter uses `WrapDatabaseAsync` under the hood to satisfy REVM's sync `DatabaseRef`
 /// trait while executing async reads on a Tokio runtime.
-#[derive(Clone)]
 pub struct QmdbRefDb<A, S, C> {
     inner: Arc<WrapDatabaseAsync<QmdbHandle<A, S, C>>>,
+}
+
+impl<A, S, C> Clone for QmdbRefDb<A, S, C> {
+    fn clone(&self) -> Self {
+        Self { inner: Arc::clone(&self.inner) }
+    }
 }
 
 impl<A, S, C> std::fmt::Debug for QmdbRefDb<A, S, C> {
@@ -86,15 +90,13 @@ where
     fn basic_ref(&self, address: Address) -> Result<Option<revm::state::AccountInfo>, Self::Error> {
         let store = block_on(self.read());
         match block_on(store.get_account(&address))? {
-            Some((nonce, balance, code_hash, _gen)) => {
-                Ok(Some(revm::state::AccountInfo {
-                    nonce,
-                    balance,
-                    code_hash,
-                    code: None,
-                    account_id: None,
-                }))
-            }
+            Some((nonce, balance, code_hash, _gen)) => Ok(Some(revm::state::AccountInfo {
+                nonce,
+                balance,
+                code_hash,
+                code: None,
+                account_id: None,
+            })),
             None => Ok(None),
         }
     }
@@ -145,15 +147,13 @@ where
         async move {
             let store = handle.read().await;
             match store.get_account(&address).await? {
-                Some((nonce, balance, code_hash, _gen)) => {
-                Ok(Some(revm::state::AccountInfo {
+                Some((nonce, balance, code_hash, _gen)) => Ok(Some(revm::state::AccountInfo {
                     nonce,
                     balance,
                     code_hash,
                     code: None,
                     account_id: None,
-                }))
-                }
+                })),
                 None => Ok(None),
             }
         }

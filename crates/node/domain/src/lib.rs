@@ -4,7 +4,7 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 mod aliases;
-pub use aliases::{ConsensusDigest, PublicKey, FinalizationEvent};
+pub use aliases::{ConsensusDigest, FinalizationEvent, PublicKey};
 
 mod commitment;
 pub use commitment::{AccountChange, StateChanges, StateChangesCfg};
@@ -19,7 +19,7 @@ mod block;
 pub use block::{Block, BlockCfg};
 
 mod idents;
-pub use idents::{BlockId, write_b256, read_b256, StateRoot, TxId};
+pub use idents::{BlockId, StateRoot, TxId, read_b256, write_b256};
 
 mod tx;
 pub use tx::{Tx, TxCfg};

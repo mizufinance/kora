@@ -18,13 +18,13 @@ use commonware_consensus::{
 use commonware_cryptography::{Committable as _, certificate::Scheme as CertScheme};
 use commonware_runtime::{Clock, Metrics, Spawner};
 use futures::StreamExt as _;
+use kora_domain::{Block, ConsensusDigest, PublicKey, TxId};
 use rand::Rng;
 
 use super::{
     execution::{evm_env, execute_txs},
     ledger::{LedgerService, LedgerView},
 };
-use kora_domain::{Block, ConsensusDigest, PublicKey, TxId};
 
 /// Helper function for propose that owns all its inputs.
 async fn propose_inner<S>(

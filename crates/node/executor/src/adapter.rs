@@ -40,7 +40,7 @@ impl<S: StateDbRead> DatabaseRef for StateDbAdapter<S> {
             Ok(nonce) => {
                 let balance = block_on(self.state.balance(&address))?;
                 let code_hash = block_on(self.state.code_hash(&address))?;
-                Ok(Some(AccountInfo { nonce, balance, code_hash, code: None }))
+                Ok(Some(AccountInfo { nonce, balance, code_hash, code: None, account_id: None }))
             }
             Err(StateDbError::AccountNotFound(_)) => Ok(None),
             Err(e) => Err(e.into()),

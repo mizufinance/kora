@@ -10,9 +10,9 @@ pub use application::execution::{
 };
 
 mod cli;
-mod qmdb;
 mod config;
 mod outcome;
+mod qmdb;
 mod simulation;
 
 fn main() {

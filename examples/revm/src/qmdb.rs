@@ -3,15 +3,16 @@
 use std::sync::Arc;
 
 use alloy_evm::revm::database::CacheDB;
-use kora_backend::{AccountStore, CodeStore, CommonwareBackend, CommonwareRootProvider, StorageStore};
+pub(crate) use kora_backend::QmdbBackendConfig as QmdbConfig;
+use kora_backend::{
+    AccountStore, CodeStore, CommonwareBackend, CommonwareRootProvider, StorageStore,
+};
 use kora_domain::StateRoot;
 use kora_handlers::{HandleError, QmdbHandle, QmdbRefDb as HandlerQmdbRefDb};
+pub(crate) use kora_qmdb::{AccountUpdate, ChangeSet as QmdbChangeSet};
 use kora_traits::{StateDb, StateDbWrite};
 use thiserror::Error;
 use tokio::sync::RwLock;
-
-pub(crate) use kora_backend::QmdbBackendConfig as QmdbConfig;
-pub(crate) use kora_qmdb::{AccountUpdate, ChangeSet as QmdbChangeSet};
 
 type Handle = QmdbHandle<AccountStore, StorageStore, CodeStore>;
 type QmdbRefDb = HandlerQmdbRefDb<AccountStore, StorageStore, CodeStore>;
@@ -42,11 +43,13 @@ impl QmdbLedger {
     pub(crate) async fn init(
         context: commonware_runtime::tokio::Context,
         config: QmdbConfig,
-        genesis_alloc: Vec<(alloy_evm::revm::primitives::Address, alloy_evm::revm::primitives::U256)>,
+        genesis_alloc: Vec<(
+            alloy_evm::revm::primitives::Address,
+            alloy_evm::revm::primitives::U256,
+        )>,
     ) -> Result<Self, Error> {
         let backend = CommonwareBackend::open(context.clone(), config.clone()).await?;
-        let root_provider =
-            CommonwareRootProvider::new(context, config);
+        let root_provider = CommonwareRootProvider::new(context, config);
         let (accounts, storage, code) = backend.into_stores();
         let handle = Handle::new(accounts, storage, code)
             .with_root_provider(Arc::new(RwLock::new(root_provider)));

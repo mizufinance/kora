@@ -9,9 +9,9 @@ use commonware_consensus::{
     },
 };
 use commonware_cryptography::bls12381::primitives::variant::Variant;
+use kora_domain::{ConsensusDigest, PublicKey};
 
 use super::super::ledger::LedgerService;
-use kora_domain::{ConsensusDigest, PublicKey};
 
 /// Helper function for SeedReporter::report that owns all its inputs.
 async fn seed_report_inner<V: Variant>(

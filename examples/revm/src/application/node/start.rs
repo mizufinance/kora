@@ -13,8 +13,10 @@ use commonware_parallel::Sequential;
 use commonware_runtime::{Metrics as _, Spawner as _};
 use commonware_utils::{NZU64, NZUsize};
 use futures::{StreamExt as _, channel::mpsc};
+use kora_domain::{BootstrapConfig, FinalizationEvent, LedgerEvent};
 
 use super::{
+    TransportContext,
     channels::{NodeChannels, register_channels},
     config::{
         EPOCH_LENGTH, MAILBOX_SIZE, PARTITION_PREFIX, Peer, ThresholdScheme, block_codec_cfg,
@@ -22,13 +24,11 @@ use super::{
     },
     env::{NodeEnvironment, TransportControl},
     marshal::{MarshalStart, start_marshal},
-    TransportContext,
 };
 use crate::application::{
     FinalizedReporter, LedgerObservers, LedgerService, LedgerView, NodeHandle, RevmApplication,
     SeedReporter,
 };
-use kora_domain::{BootstrapConfig, FinalizationEvent, LedgerEvent};
 
 /// Initialize and run a single node (QMDB/state + marshal + simplex engine).
 pub(crate) async fn start_node<E>(

@@ -16,20 +16,22 @@ allow = [
     "Unlicense",
     "Zlib",
     "CC0-1.0",
-    "MPL-2.0",
-    "0BSD",
     "BSL-1.0",
     "OpenSSL",
 ]
 confidence-threshold = 0.8
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "allow"
 wildcards = "allow"
+skip = [
+    "block-buffer",
+    "digest",
+    "getrandom",
+    "windows-sys",
+    "windows-link",
+]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = [
-    "https://github.com/commonwarexyz/monorepo.git",
-]

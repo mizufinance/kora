@@ -5,18 +5,14 @@ use async_trait::async_trait;
 use commonware_codec::RangeCfg;
 use commonware_cryptography::sha256::Digest as QmdbDigest;
 use commonware_runtime::{Metrics as _, buffer::PoolRef};
-use commonware_storage::qmdb::any::VariableConfig;
-use commonware_storage::translator::EightCap;
+use commonware_storage::{qmdb::any::VariableConfig, translator::EightCap};
 use commonware_utils::{NZU64, NZUsize};
 use kora_handlers::{HandleError, RootProvider};
 use kora_qmdb::{ChangeSet, QmdbStore, StateRoot};
 
 use crate::{
     AccountStore, BackendError, CodeStore, QmdbBackendConfig, StorageStore,
-    accounts::AccountStoreDirty,
-    code::CodeStoreDirty,
-    storage::StorageStoreDirty,
-    types::Context,
+    accounts::AccountStoreDirty, code::CodeStoreDirty, storage::StorageStoreDirty, types::Context,
 };
 
 const CODE_MAX_BYTES: usize = 24_576;
@@ -140,9 +136,7 @@ impl RootProvider for CommonwareRootProvider {
         qmdb.commit_changes(changes.clone())
             .await
             .map_err(|e| HandleError::RootComputation(e.to_string()))?;
-        let stores = qmdb
-            .take_stores()
-            .map_err(|e| HandleError::RootComputation(e.to_string()))?;
+        let stores = qmdb.take_stores().map_err(|e| HandleError::RootComputation(e.to_string()))?;
         let accounts = stores.accounts.root();
         let storage = stores.storage.root();
         let code = stores.code.root();
@@ -235,11 +229,7 @@ fn state_root_from_stores(
     storage: &StorageStore,
     code: &CodeStore,
 ) -> Result<B256, BackendError> {
-    Ok(state_root_from_roots(
-        accounts.root()?,
-        storage.root()?,
-        code.root()?,
-    ))
+    Ok(state_root_from_roots(accounts.root()?, storage.root()?, code.root()?))
 }
 
 fn state_root_from_roots(accounts: QmdbDigest, storage: QmdbDigest, code: QmdbDigest) -> B256 {

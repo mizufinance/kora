@@ -1,9 +1,9 @@
 use commonware_runtime::Spawner;
 use futures::StreamExt;
+use kora_domain::LedgerEvent;
 use tracing::{debug, trace};
 
 use super::ledger::LedgerService;
-use kora_domain::LedgerEvent;
 
 /// Observers that react to ledger domain events without mutating aggregates.
 pub(crate) struct LedgerObservers;

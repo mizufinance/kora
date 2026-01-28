@@ -1,7 +1,7 @@
 //! Identifiers
 
-use bytes::{Buf, BufMut};
 use alloy_evm::revm::primitives::B256;
+use bytes::{Buf, BufMut};
 use commonware_codec::{Error as CodecError, FixedSize, Read, Write};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -91,6 +91,7 @@ mod tests {
     use commonware_codec::{Decode as _, Encode as _};
 
     use super::*;
+    use crate::{Block, BlockCfg, Tx, TxCfg};
 
     fn cfg() -> BlockCfg {
         BlockCfg { max_txs: 64, tx: TxCfg { max_calldata_bytes: 1024 } }
@@ -106,8 +107,8 @@ mod tests {
             data: Bytes::from(vec![1, 2, 3]),
         };
         let encoded = tx.encode();
-        let decoded =
-            Tx::decode_cfg(encoded.clone(), &TxCfg { max_calldata_bytes: 1024 }).expect("decode tx");
+        let decoded = Tx::decode_cfg(encoded.clone(), &TxCfg { max_calldata_bytes: 1024 })
+            .expect("decode tx");
         assert_eq!(tx, decoded);
         assert_eq!(tx.id(), decoded.id());
         assert_eq!(tx.id(), TxId(keccak256(encoded)));

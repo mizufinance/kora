@@ -22,9 +22,9 @@ use alloy_evm::{
     },
 };
 use anyhow::Context as _;
+use kora_domain::{AccountChange, StateChanges, Tx};
 
 use crate::qmdb::{AccountUpdate, QmdbChangeSet};
-use kora_domain::{AccountChange, StateChanges, Tx};
 
 /// Example chain id used by the simulation.
 pub const CHAIN_ID: u64 = 1337;
@@ -206,11 +206,11 @@ mod tests {
             state::AccountInfo,
         },
     };
+    use kora_domain::Tx;
 
     use super::{
         evm_env, execute_txs, precompiles_with_seed, seed_precompile_address, tx_env_from_db,
     };
-    use kora_domain::Tx;
 
     const HEIGHT: u64 = 1;
     const INITIAL_BALANCE: u64 = 1_000_000;

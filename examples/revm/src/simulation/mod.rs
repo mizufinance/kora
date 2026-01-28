@@ -13,16 +13,16 @@ use commonware_p2p::{Manager as _, simulated};
 use commonware_runtime::{Metrics as _, Runner as _, tokio};
 use commonware_utils::{TryCollect as _, ordered::Set};
 use futures::{StreamExt as _, channel::mpsc};
+use kora_domain::{BootstrapConfig, ConsensusDigest, FinalizationEvent, StateRoot};
 
 use crate::{
     application::{
         NodeEnvironment, ThresholdScheme, TransportContext, TransportControl, start_node,
         threshold_schemes,
     },
-    outcome::SimOutcome,
     config::SimConfig,
+    outcome::SimOutcome,
 };
-use kora_domain::{BootstrapConfig, ConsensusDigest, FinalizationEvent, StateRoot};
 
 mod demo;
 
@@ -30,8 +30,6 @@ mod demo;
 pub(super) const MAX_MSG_SIZE: usize = 1024 * 1024;
 /// Fixed latency (milliseconds) for simulated P2P links.
 pub(super) const P2P_LINK_LATENCY_MS: u64 = 5;
-
-
 
 type NodeHandle = crate::application::NodeHandle;
 type SimTransport = simulated::Oracle<ed25519::PublicKey, TransportContext>;
@@ -304,6 +302,8 @@ async fn assert_all_nodes_converged(
 
 #[cfg(test)]
 mod tests {
+    use alloy_evm::revm::primitives::U256;
+
     use super::*;
 
     #[test]

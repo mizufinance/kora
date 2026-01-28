@@ -5,9 +5,9 @@
 //! - query state at a finalized digest for assertions.
 
 use alloy_evm::revm::primitives::{Address, B256, U256};
+use kora_domain::{ConsensusDigest, StateRoot, Tx};
 
 use super::ledger::LedgerService;
-use kora_domain::{ConsensusDigest, StateRoot, Tx};
 
 #[derive(Clone)]
 /// Handle that exposes application queries and submissions to the simulation harness.

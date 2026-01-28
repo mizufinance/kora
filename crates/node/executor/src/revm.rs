@@ -13,7 +13,10 @@ use revm::{
         block::BlockEnv,
         result::{ExecutionResult, Output},
     },
-    context_interface::transaction::{AccessList, AccessListItem},
+    context_interface::{
+        ContextSetters,
+        transaction::{AccessList, AccessListItem},
+    },
     database::State,
     primitives::{TxKind, hardfork::SpecId},
     state::{EvmState, EvmStorageSlot},
@@ -70,8 +73,8 @@ impl<S: StateDb> BlockExecutor<S> for RevmExecutor {
                 cfg.chain_id = self.chain_id;
             })
             .modify_block_chained(|blk: &mut BlockEnv| {
-                blk.number = context.header.number;
-                blk.timestamp = context.header.timestamp;
+                blk.number = U256::from(context.header.number);
+                blk.timestamp = U256::from(context.header.timestamp);
                 blk.beneficiary = context.header.beneficiary;
                 blk.gas_limit = context.header.gas_limit;
                 blk.basefee = context.header.base_fee_per_gas.unwrap_or_default();
@@ -423,7 +426,7 @@ mod tests {
         // Add a storage change
         account
             .storage
-            .insert(U256::from(1), EvmStorageSlot::new_changed(U256::ZERO, U256::from(42)));
+            .insert(U256::from(1), EvmStorageSlot::new_changed(U256::ZERO, U256::from(42), 0));
 
         state.insert(Address::ZERO, account);
 
@@ -445,7 +448,7 @@ mod tests {
         let mut account = Account::default();
         account.info.nonce = 1;
         account.info.balance = U256::from(1000);
-        account.status = AccountStatus::Loaded; // Not touched
+        account.status = AccountStatus::empty(); // Not touched
 
         state.insert(Address::ZERO, account);
 

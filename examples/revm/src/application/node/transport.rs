@@ -30,19 +30,13 @@ fn remap_socket(socket: SocketAddr) -> SocketAddr {
 
 impl TransportContext {
     pub(crate) fn new(inner: tokio::Context) -> Self {
-        Self {
-            inner,
-            force_base_addr: true,
-        }
+        Self { inner, force_base_addr: true }
     }
 }
 
 impl Clone for TransportContext {
     fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            force_base_addr: false,
-        }
+        Self { inner: self.inner.clone(), force_base_addr: false }
     }
 }
 
@@ -79,18 +73,10 @@ impl commonware_runtime::Metrics for TransportContext {
     }
 
     fn with_label(&self, label: &str) -> Self {
-        Self {
-            inner: self.inner.with_label(label),
-            force_base_addr: false,
-        }
+        Self { inner: self.inner.with_label(label), force_base_addr: false }
     }
 
-    fn register<N: Into<String>, H: Into<String>>(
-        &self,
-        name: N,
-        help: H,
-        metric: impl Metric,
-    ) {
+    fn register<N: Into<String>, H: Into<String>>(&self, name: N, help: H, metric: impl Metric) {
         self.inner.register(name, help, metric);
     }
 
@@ -122,10 +108,7 @@ impl commonware_runtime::Spawner for TransportContext {
         T: Send + 'static,
     {
         self.inner.spawn(|context| {
-            let context = TransportContext {
-                inner: context,
-                force_base_addr: false,
-            };
+            let context = TransportContext { inner: context, force_base_addr: false };
             f(context)
         })
     }
@@ -159,10 +142,7 @@ impl commonware_runtime::Network for TransportContext {
         socket: SocketAddr,
     ) -> impl std::future::Future<
         Output = Result<
-            (
-                commonware_runtime::SinkOf<Self>,
-                commonware_runtime::StreamOf<Self>,
-            ),
+            (commonware_runtime::SinkOf<Self>, commonware_runtime::StreamOf<Self>),
             commonware_runtime::Error,
         >,
     > + Send {

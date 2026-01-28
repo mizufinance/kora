@@ -2,13 +2,13 @@ use commonware_consensus::{Block as _, Reporter, marshal::Update};
 use commonware_cryptography::Committable as _;
 use commonware_runtime::{Spawner as _, tokio};
 use commonware_utils::acknowledgement::Acknowledgement as _;
+use kora_domain::Block;
 use tracing::{error, trace, warn};
 
 use super::super::{
     execution::{evm_env, execute_txs},
     ledger::LedgerService,
 };
-use kora_domain::Block;
 
 /// Helper function for `FinalizedReporter::report` that owns all its inputs.
 async fn handle_finalized_update(

@@ -2,9 +2,7 @@
 
 use clap::Parser;
 
-use crate::config::SimConfig;
-use crate::outcome::SimOutcome;
-use crate::simulation::simulate;
+use crate::{config::SimConfig, outcome::SimOutcome, simulation::simulate};
 
 /// CLI arguments for the kora-revm-example.
 #[derive(Parser, Debug)]
@@ -27,10 +25,6 @@ pub(crate) struct Cli {
 impl Cli {
     /// Run the simulation with the configured parameters.
     pub(crate) fn run(self) -> anyhow::Result<SimOutcome> {
-        simulate(SimConfig {
-            nodes: self.nodes,
-            blocks: self.blocks,
-            seed: self.seed,
-        })
+        simulate(SimConfig { nodes: self.nodes, blocks: self.blocks, seed: self.seed })
     }
 }
