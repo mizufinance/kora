@@ -14,7 +14,7 @@ impl DefaultQuota {
     /// Initializes a default [`Quota`].
     ///
     /// Uses 1,000 requests per second.
-    pub fn init() -> Quota {
+    pub const fn init() -> Quota {
         Quota::per_second(NZU32!(DEFAULT_REQUESTS_PER_SECOND))
     }
 }

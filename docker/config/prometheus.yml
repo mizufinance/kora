@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  - job_name: 'kora-validators'
+    static_configs:
+      - targets:
+        - 'validator-node0:9002'
+        - 'validator-node1:9002'
+        - 'validator-node2:9002'
+        - 'validator-node3:9002'
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: 'validator-node(\d+):.*'
+        target_label: validator_index
+        replacement: '$1'

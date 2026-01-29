@@ -5,8 +5,7 @@
 
 mod cli;
 
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
+fn main() -> eyre::Result<()> {
     use clap::Parser;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -18,5 +17,5 @@ async fn main() -> eyre::Result<()> {
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    cli::Cli::parse().run().await
+    cli::Cli::parse().run()
 }

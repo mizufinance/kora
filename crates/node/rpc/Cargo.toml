@@ -1,0 +1,28 @@
+[package]
+name = "kora-rpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "RPC server for Kora nodes"
+
+[lints]
+workspace = true
+
+[dependencies]
+# HTTP server
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+
+# Async
+tokio = { workspace = true, features = ["net", "sync"] }
+
+# Serialization
+serde.workspace = true
+
+# Tracing
+tracing.workspace = true
+
+# Misc
+parking_lot = "0.12"

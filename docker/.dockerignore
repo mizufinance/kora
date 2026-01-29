@@ -1,0 +1,31 @@
+# Build artifacts
+target/
+*.rlib
+*.rmeta
+
+# Git
+.git/
+.gitignore
+.github/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker volumes (local development)
+volumes/
+
+# Documentation
+*.md
+!README.md
+
+# Test files
+*.test
+*_test.go
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log

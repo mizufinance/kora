@@ -1,0 +1,47 @@
+[package]
+name = "kora-runner"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Production node runner for Kora validators"
+
+[dependencies]
+kora-config.workspace = true
+kora-consensus.workspace = true
+kora-domain.workspace = true
+kora-dkg.workspace = true
+kora-executor.workspace = true
+kora-ledger.workspace = true
+kora-marshal.workspace = true
+kora-overlay.workspace = true
+kora-qmdb.workspace = true
+kora-qmdb-ledger.workspace = true
+kora-reporters.workspace = true
+kora-rpc.workspace = true
+kora-service.workspace = true
+kora-simplex.workspace = true
+kora-transport.workspace = true
+
+commonware-broadcast.workspace = true
+commonware-codec.workspace = true
+commonware-consensus.workspace = true
+commonware-cryptography.workspace = true
+commonware-p2p.workspace = true
+commonware-parallel.workspace = true
+commonware-runtime.workspace = true
+commonware-utils.workspace = true
+
+alloy-consensus = { workspace = true }
+alloy-primitives.workspace = true
+
+tokio.workspace = true
+futures.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+rand.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,81 @@
+set dotenv-load := true
+
+default:
+    @just --list
+
+build:
+    docker buildx bake --allow=fs.read=.. -f docker-bake.hcl kora-local
+
+build-fresh:
+    docker buildx bake --allow=fs.read=.. -f docker-bake.hcl kora-local --no-cache
+
+devnet:
+    ./scripts/devnet-run.sh
+
+devnet-minimal:
+    @COMPOSE_PROFILES="" ./scripts/devnet-run.sh
+
+stats:
+    ./scripts/devnet-stats.sh
+
+down:
+    docker compose -f compose/devnet.yaml down
+
+reset:
+    docker compose -f compose/devnet.yaml down -v
+    @echo "Devnet reset. Next 'just devnet' runs fresh DKG."
+
+restart: down devnet
+
+restart-validators:
+    docker compose -f compose/devnet.yaml restart validator-node0 validator-node1 validator-node2 validator-node3
+
+status:
+    @echo ""
+    @docker compose -f compose/devnet.yaml ps
+    @echo ""
+    @echo "Endpoints:"
+    @echo "  P2P:        localhost:30400-30403"
+    @echo "  RPC:        localhost:8540-8543 (disabled)"
+    @echo "  Prometheus: http://localhost:9090"
+    @echo "  Grafana:    http://localhost:3000"
+
+logs:
+    docker compose -f compose/devnet.yaml logs -f validator-node0 validator-node1 validator-node2 validator-node3
+
+logs-dkg:
+    docker compose -f compose/devnet.yaml logs -f dkg-node0 dkg-node1 dkg-node2 dkg-node3
+
+logs-node node:
+    docker compose -f compose/devnet.yaml logs -f {{node}}
+
+exec node:
+    docker compose -f compose/devnet.yaml exec {{node}} /bin/bash
+
+redo-dkg:
+    #!/bin/bash
+    docker compose -f compose/devnet.yaml stop validator-node0 validator-node1 validator-node2 validator-node3
+    
+    for i in 0 1 2 3; do
+        docker run --rm -v kora-devnet_data_node${i}:/data alpine rm -f /data/share.key /data/output.json
+    done
+    
+    docker compose -f compose/devnet.yaml up -d dkg-node0 dkg-node1 dkg-node2 dkg-node3
+    
+    echo "Waiting for DKG..."
+    while true; do
+        HEALTHY=$(docker compose -f compose/devnet.yaml ps --format json 2>/dev/null | \
+            jq -r 'select(.Service | startswith("dkg-")) | select(.Health == "healthy") | .Service' | wc -l)
+        [[ "$HEALTHY" -ge 4 ]] && break
+        sleep 2
+    done
+    
+    docker compose -f compose/devnet.yaml stop dkg-node0 dkg-node1 dkg-node2 dkg-node3
+    docker compose -f compose/devnet.yaml up -d validator-node0 validator-node1 validator-node2 validator-node3
+    echo "DKG complete. Validators restarted."
+
+lint:
+    hadolint Dockerfile
+
+validate:
+    docker compose -f compose/devnet.yaml config --quiet && echo "Compose valid"

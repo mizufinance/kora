@@ -3077,14 +3077,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "keygen"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "commonware-codec",
+ "commonware-cryptography",
+ "commonware-utils",
+ "ed25519-consensus",
+ "eyre",
+ "hex",
+ "kora-config",
+ "kora-dkg",
+ "kora-domain",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber 0.3.22",
+]
+
+[[package]]
 name = "kora"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "commonware-codec",
+ "commonware-cryptography",
  "eyre",
+ "hex",
  "kora-cli",
  "kora-config",
+ "kora-dkg",
+ "kora-domain",
+ "kora-rpc",
+ "kora-runner",
  "kora-service",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.22",
@@ -3160,6 +3190,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "kora-crypto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "commonware-consensus",
+ "commonware-cryptography",
+ "commonware-utils",
+ "kora-domain",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "kora-dkg"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "commonware-codec",
+ "commonware-consensus",
+ "commonware-cryptography",
+ "commonware-p2p",
+ "commonware-runtime",
+ "commonware-utils",
+ "futures",
+ "hex",
+ "kora-config",
+ "kora-domain",
+ "kora-transport",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kora-domain"
 version = "0.1.0"
 dependencies = [
@@ -3173,6 +3239,8 @@ dependencies = [
  "commonware-cryptography",
  "futures",
  "k256",
+ "serde",
+ "serde_json",
  "sha3",
 ]
 
@@ -3301,6 +3369,7 @@ dependencies = [
  "kora-ledger",
  "kora-overlay",
  "kora-qmdb-ledger",
+ "kora-rpc",
  "tracing",
 ]
 
@@ -3313,26 +3382,77 @@ dependencies = [
  "alloy-primitives",
  "anyhow",
  "clap",
- "commonware-broadcast",
  "commonware-consensus",
  "commonware-cryptography",
  "commonware-p2p",
  "commonware-parallel",
  "commonware-runtime",
- "commonware-storage",
  "commonware-utils",
  "futures",
- "governor",
  "k256",
+ "kora-config",
  "kora-consensus",
+ "kora-crypto",
  "kora-domain",
  "kora-executor",
  "kora-ledger",
+ "kora-marshal",
  "kora-overlay",
  "kora-reporters",
+ "kora-service",
+ "kora-simplex",
  "kora-sys",
- "prometheus-client",
+ "kora-transport-sim",
  "rand 0.8.5",
+ "tracing",
+]
+
+[[package]]
+name = "kora-rpc"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "parking_lot",
+ "serde",
+ "tokio",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "kora-runner"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-primitives",
+ "anyhow",
+ "commonware-broadcast",
+ "commonware-codec",
+ "commonware-consensus",
+ "commonware-cryptography",
+ "commonware-p2p",
+ "commonware-parallel",
+ "commonware-runtime",
+ "commonware-utils",
+ "futures",
+ "kora-config",
+ "kora-consensus",
+ "kora-dkg",
+ "kora-domain",
+ "kora-executor",
+ "kora-ledger",
+ "kora-marshal",
+ "kora-overlay",
+ "kora-qmdb",
+ "kora-qmdb-ledger",
+ "kora-reporters",
+ "kora-rpc",
+ "kora-service",
+ "kora-simplex",
+ "kora-transport",
+ "rand 0.8.5",
+ "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 
@@ -3349,6 +3469,7 @@ dependencies = [
  "futures",
  "kora-config",
  "kora-transport",
+ "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -3395,6 +3516,23 @@ dependencies = [
  "rand_core 0.6.4",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kora-transport-sim"
+version = "0.1.0"
+dependencies = [
+ "commonware-cryptography",
+ "commonware-p2p",
+ "commonware-runtime",
+ "commonware-utils",
+ "governor",
+ "kora-config",
+ "kora-service",
+ "kora-transport",
+ "prometheus-client",
+ "rand 0.8.5",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

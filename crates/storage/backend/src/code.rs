@@ -57,7 +57,7 @@ impl std::fmt::Debug for CodeStore {
 /// Error type for code store operations.
 pub type CodeStoreError = BackendError;
 
-fn code_key(hash: B256) -> CodeKey {
+const fn code_key(hash: B256) -> CodeKey {
     CodeKey::new(hash.0)
 }
 

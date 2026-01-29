@@ -24,6 +24,7 @@ use kora_executor::{BlockContext, BlockExecutor};
 use kora_ledger::LedgerService;
 use kora_overlay::OverlayState;
 use kora_qmdb_ledger::QmdbState;
+use kora_rpc::NodeState;
 use tracing::{error, trace, warn};
 
 /// Provides block execution context for finalized block verification.
@@ -248,5 +249,56 @@ where
         async move {
             handle_finalized_update(state, context, executor, provider, update).await;
         }
+    }
+}
+
+/// Reporter that updates RPC-visible node state from consensus activity.
+///
+/// This reporter tracks:
+/// - Current view number (from notarizations)
+/// - Finalized block count
+/// - Nullified round count
+#[derive(Clone)]
+pub struct NodeStateReporter<S> {
+    /// RPC node state to update.
+    state: NodeState,
+    /// Marker for the signing scheme.
+    _scheme: PhantomData<S>,
+}
+
+impl<S> fmt::Debug for NodeStateReporter<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeStateReporter").finish_non_exhaustive()
+    }
+}
+
+impl<S> NodeStateReporter<S> {
+    /// Create a new node state reporter.
+    pub const fn new(state: NodeState) -> Self {
+        Self { state, _scheme: PhantomData }
+    }
+}
+
+impl<S> Reporter for NodeStateReporter<S>
+where
+    S: commonware_cryptography::certificate::Scheme + Clone + Send + 'static,
+{
+    type Activity = Activity<S, ConsensusDigest>;
+
+    fn report(&mut self, activity: Self::Activity) -> impl std::future::Future<Output = ()> + Send {
+        match &activity {
+            Activity::Notarization(n) => {
+                self.state.set_view(n.proposal.round.view().get());
+            }
+            Activity::Finalization(f) => {
+                self.state.set_view(f.proposal.round.view().get());
+                self.state.inc_finalized();
+            }
+            Activity::Nullification(_) => {
+                self.state.inc_nullified();
+            }
+            _ => {}
+        }
+        async {}
     }
 }

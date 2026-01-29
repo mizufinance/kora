@@ -1,0 +1,13 @@
+target/
+.git/
+*.log
+*.tmp
+.env
+.env.*
+node_modules/
+.cargo/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

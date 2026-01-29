@@ -18,6 +18,7 @@ kora-executor = { path = "../executor" }
 kora-ledger = { path = "../ledger" }
 kora-overlay = { path = "../../storage/overlay" }
 kora-qmdb-ledger = { path = "../../storage/qmdb-ledger" }
+kora-rpc = { path = "../rpc" }
 
 # Commonware
 commonware-codec.workspace = true

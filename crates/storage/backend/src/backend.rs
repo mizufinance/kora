@@ -50,7 +50,7 @@ impl std::fmt::Debug for CommonwareRootProvider {
 
 impl CommonwareRootProvider {
     /// Create a new root provider from the given context and config.
-    pub fn new(context: Context, config: QmdbBackendConfig) -> Self {
+    pub const fn new(context: Context, config: QmdbBackendConfig) -> Self {
         Self { context, config }
     }
 }
