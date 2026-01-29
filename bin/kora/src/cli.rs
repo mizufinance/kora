@@ -56,15 +56,15 @@ impl Cli {
         Ok(config)
     }
 
-    pub(crate) async fn run(self) -> eyre::Result<()> {
+    pub(crate) fn run(self) -> eyre::Result<()> {
         match &self.command {
-            Some(Commands::Dkg(args)) => self.run_dkg(args).await,
-            Some(Commands::Validator(args)) => self.run_validator(args).await,
-            None => self.run_legacy().await,
+            Some(Commands::Dkg(args)) => self.run_dkg(args),
+            Some(Commands::Validator(args)) => self.run_validator(args),
+            None => self.run_legacy(),
         }
     }
 
-    async fn run_dkg(&self, args: &DkgArgs) -> eyre::Result<()> {
+    fn run_dkg(&self, args: &DkgArgs) -> eyre::Result<()> {
         use kora_dkg::{DkgCeremony, DkgConfig};
 
         let node_config = self.load_config()?;
@@ -93,17 +93,16 @@ impl Cli {
         };
 
         let ceremony = DkgCeremony::new(dkg_config);
-        let output = ceremony.run().await?;
 
-        tracing::info!(
-            share_index = output.share_index,
-            "DKG ceremony completed successfully"
-        );
+        let rt = tokio::runtime::Runtime::new()?;
+        let output = rt.block_on(ceremony.run())?;
+
+        tracing::info!(share_index = output.share_index, "DKG ceremony completed successfully");
 
         Ok(())
     }
 
-    async fn run_validator(&self, _args: &ValidatorArgs) -> eyre::Result<()> {
+    fn run_validator(&self, _args: &ValidatorArgs) -> eyre::Result<()> {
         let config = self.load_config()?;
 
         tracing::info!(chain_id = config.chain_id, "Starting validator");
@@ -120,7 +119,7 @@ impl Cli {
         LegacyNodeService::new(config).run()
     }
 
-    async fn run_legacy(&self) -> eyre::Result<()> {
+    fn run_legacy(&self) -> eyre::Result<()> {
         let config = self.load_config()?;
 
         tracing::info!(chain_id = config.chain_id, "Starting node (legacy mode)");
@@ -143,9 +142,8 @@ fn load_peers(path: &PathBuf) -> eyre::Result<PeersInfo> {
     let content = std::fs::read_to_string(path)?;
     let json: serde_json::Value = serde_json::from_str(&content)?;
 
-    let threshold = json["threshold"]
-        .as_u64()
-        .ok_or_else(|| eyre::eyre!("missing threshold"))? as u32;
+    let threshold =
+        json["threshold"].as_u64().ok_or_else(|| eyre::eyre!("missing threshold"))? as u32;
 
     let participants_hex: Vec<String> = json["participants"]
         .as_array()
@@ -161,9 +159,8 @@ fn load_peers(path: &PathBuf) -> eyre::Result<PeersInfo> {
         participants.push(pk);
     }
 
-    let bootstrappers_obj = json["bootstrappers"]
-        .as_object()
-        .ok_or_else(|| eyre::eyre!("missing bootstrappers"))?;
+    let bootstrappers_obj =
+        json["bootstrappers"].as_object().ok_or_else(|| eyre::eyre!("missing bootstrappers"))?;
 
     let mut bootstrappers = Vec::new();
     for (pk_hex, addr) in bootstrappers_obj {
@@ -173,9 +170,5 @@ fn load_peers(path: &PathBuf) -> eyre::Result<PeersInfo> {
         bootstrappers.push((pk, addr_str.to_string()));
     }
 
-    Ok(PeersInfo {
-        participants,
-        threshold,
-        bootstrappers,
-    })
+    Ok(PeersInfo { participants, threshold, bootstrappers })
 }
