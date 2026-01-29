@@ -9,66 +9,14 @@ build:
 build-fresh:
     docker buildx bake --allow=fs.read=.. -f docker-bake.hcl kora-local --no-cache
 
-devnet: build _devnet-run
+devnet:
+    ./scripts/devnet-run.sh
 
-devnet-minimal: build
-    @COMPOSE_PROFILES="" just _devnet-run
+devnet-minimal:
+    @COMPOSE_PROFILES="" ./scripts/devnet-run.sh
 
-_devnet-run:
-    #!/bin/bash
-    set -e
-    
-    echo "Starting Kora Devnet..."
-    echo "Chain ID: ${CHAIN_ID:-1337} | Validators: 4 | Threshold: 3"
-    echo ""
-    
-    CONFIG_EXISTS=false
-    SHARES_EXIST=false
-    
-    docker volume inspect kora-devnet_shared_config >/dev/null 2>&1 && \
-        docker run --rm -v kora-devnet_shared_config:/shared alpine test -f /shared/peers.json && \
-        CONFIG_EXISTS=true
-    
-    docker volume inspect kora-devnet_data_node0 >/dev/null 2>&1 && \
-        docker run --rm -v kora-devnet_data_node0:/data alpine test -f /data/share.key && \
-        SHARES_EXIST=true
-    
-    if [[ "$CONFIG_EXISTS" != "true" ]]; then
-        echo "[Phase 0] Generating configuration..."
-        docker compose -f compose/devnet.yaml run --rm init-config
-    else
-        echo "[Phase 0] Configuration exists"
-    fi
-    
-    if [[ "$SHARES_EXIST" != "true" ]]; then
-        echo ""
-        echo "[Phase 1] Running interactive DKG ceremony..."
-        docker compose -f compose/devnet.yaml up -d dkg-node0 dkg-node1 dkg-node2 dkg-node3
-        
-        echo "Waiting for DKG completion..."
-        while true; do
-            HEALTHY=$(docker compose -f compose/devnet.yaml ps --format json 2>/dev/null | \
-                jq -r 'select(.Service | startswith("dkg-")) | select(.Health == "healthy") | .Service' | wc -l)
-            [[ "$HEALTHY" -ge 4 ]] && break
-            printf "."
-            sleep 2
-        done
-        echo ""
-        echo "[Phase 1] DKG ceremony complete"
-        
-        docker compose -f compose/devnet.yaml stop dkg-node0 dkg-node1 dkg-node2 dkg-node3
-    else
-        echo "[Phase 1] Threshold shares exist"
-    fi
-    
-    echo ""
-    echo "[Phase 2] Starting validators..."
-    docker compose -f compose/devnet.yaml ${COMPOSE_PROFILES:+--profile observability} up -d \
-        validator-node0 validator-node1 validator-node2 validator-node3 \
-        ${COMPOSE_PROFILES:+prometheus grafana}
-    
-    echo ""
-    just status
+stats:
+    ./scripts/devnet-stats.sh
 
 down:
     docker compose -f compose/devnet.yaml down

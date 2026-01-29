@@ -248,10 +248,27 @@ where
         mut ancestry: AncestorStream<Self::SigningScheme, Self::Block>,
     ) -> impl std::future::Future<Output = bool> + Send {
         async move {
-            let Some(block) = ancestry.next().await else {
+            // Collect all available ancestry blocks from the stream.
+            // The stream yields tip-first (newest → oldest), so we reverse
+            // to verify in parent-first order, ensuring each block's parent
+            // snapshot exists before we attempt to verify it.
+            let mut blocks = Vec::new();
+            while let Some(block) = ancestry.next().await {
+                blocks.push(block);
+            }
+
+            if blocks.is_empty() {
                 return false;
-            };
-            self.verify_block(&block).await
+            }
+
+            // Verify from oldest (parent) to newest (tip)
+            for block in blocks.into_iter().rev() {
+                if !self.verify_block(&block).await {
+                    return false;
+                }
+            }
+
+            true
         }
     }
 }

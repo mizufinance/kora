@@ -3,8 +3,11 @@
 use commonware_runtime::buffer::PoolRef;
 use commonware_utils::{NZU16, NZUsize};
 
-/// Default page size in bytes (16 KiB).
-pub const DEFAULT_PAGE_SIZE: u16 = 16_384;
+/// Default page size in bytes (32 KiB).
+///
+/// This matches the minimum floor required by consensus message serialization
+/// (BLS signatures, finalization certificates, etc.).
+pub const DEFAULT_PAGE_SIZE: u16 = 32_768;
 
 /// Default pool capacity (number of pages).
 pub const DEFAULT_POOL_CAPACITY: usize = 10_000;

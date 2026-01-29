@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use commonware_codec::Write as _;
 use commonware_cryptography::bls12381::{
     dkg,
     primitives::{sharing::Mode, variant::MinSig},
@@ -67,11 +68,29 @@ impl DkgCeremony {
         let mut share_bytes = Vec::new();
         commonware_codec::Write::write(&my_share, &mut share_bytes);
 
+        let participant_keys: Vec<Vec<u8>> = self
+            .config
+            .participants
+            .iter()
+            .map(|pk| {
+                let mut bytes = Vec::new();
+                commonware_codec::Write::write(pk, &mut bytes);
+                bytes
+            })
+            .collect();
+
+        // Serialize the full polynomial (Sharing) for reconstruction
+        let mut polynomial_bytes = Vec::new();
+        public_output.public().write(&mut polynomial_bytes);
+
         let output = DkgOutput {
             group_public_key: group_key_bytes,
-            public_polynomial: vec![],
+            public_polynomial: polynomial_bytes,
+            threshold: self.config.t() as u32,
+            participants: self.config.n(),
             share_index: self.config.validator_index as u32,
             share_secret: share_bytes,
+            participant_keys,
         };
 
         output.save(&self.config.data_dir)?;

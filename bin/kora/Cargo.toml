@@ -11,6 +11,8 @@ kora-cli.workspace = true
 kora-config.workspace = true
 kora-service.workspace = true
 kora-dkg.workspace = true
+kora-runner.workspace = true
+kora-domain.workspace = true
 
 commonware-cryptography.workspace = true
 commonware-codec.workspace = true

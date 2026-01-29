@@ -8,8 +8,11 @@ use crate::DkgError;
 pub struct DkgOutput {
     pub group_public_key: Vec<u8>,
     pub public_polynomial: Vec<u8>,
+    pub threshold: u32,
+    pub participants: usize,
     pub share_index: u32,
     pub share_secret: Vec<u8>,
+    pub participant_keys: Vec<Vec<u8>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -18,6 +21,8 @@ struct OutputJson {
     public_polynomial: String,
     threshold: u32,
     participants: usize,
+    #[serde(default)]
+    participant_keys: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -31,8 +36,9 @@ impl DkgOutput {
         let output_json = OutputJson {
             group_public_key: hex::encode(&self.group_public_key),
             public_polynomial: hex::encode(&self.public_polynomial),
-            threshold: self.share_index,
-            participants: 0,
+            threshold: self.threshold,
+            participants: self.participants,
+            participant_keys: self.participant_keys.iter().map(|k| hex::encode(k)).collect(),
         };
 
         let output_path = data_dir.join("output.json");
@@ -58,14 +64,23 @@ impl DkgOutput {
         let share: ShareJson =
             serde_json::from_str(&share_str).map_err(|e| DkgError::Serialization(e.to_string()))?;
 
+        let participant_keys = output
+            .participant_keys
+            .iter()
+            .map(|k| hex::decode(k).map_err(|e| DkgError::Serialization(e.to_string())))
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             group_public_key: hex::decode(&output.group_public_key)
                 .map_err(|e| DkgError::Serialization(e.to_string()))?,
             public_polynomial: hex::decode(&output.public_polynomial)
                 .map_err(|e| DkgError::Serialization(e.to_string()))?,
+            threshold: output.threshold,
+            participants: output.participants,
             share_index: share.index,
             share_secret: hex::decode(&share.secret)
                 .map_err(|e| DkgError::Serialization(e.to_string()))?,
+            participant_keys,
         })
     }
 

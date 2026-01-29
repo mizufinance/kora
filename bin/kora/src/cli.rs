@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use kora_config::NodeConfig;
+use kora_domain::BootstrapConfig;
+use kora_runner::{ProductionRunner, load_threshold_scheme};
 use kora_service::LegacyNodeService;
 
 #[derive(Parser, Debug)]
@@ -102,8 +104,8 @@ impl Cli {
         Ok(())
     }
 
-    fn run_validator(&self, _args: &ValidatorArgs) -> eyre::Result<()> {
-        let config = self.load_config()?;
+    fn run_validator(&self, args: &ValidatorArgs) -> eyre::Result<()> {
+        let mut config = self.load_config()?;
 
         tracing::info!(chain_id = config.chain_id, "Starting validator");
 
@@ -116,7 +118,32 @@ impl Cli {
         let dkg_output = kora_dkg::DkgOutput::load(&config.data_dir)?;
         tracing::info!(share_index = dkg_output.share_index, "Loaded DKG output");
 
-        LegacyNodeService::new(config).run()
+        let scheme = load_threshold_scheme(&config.data_dir)
+            .map_err(|e| eyre::eyre!("Failed to load threshold scheme: {}", e))?;
+        tracing::info!("Loaded threshold signing scheme");
+
+        if let Some(ref peers_path) = args.peers {
+            let peers = load_peers(peers_path)?;
+            config.network.bootstrap_peers = peers
+                .bootstrappers
+                .iter()
+                .map(|(pk, addr)| format!("{}@{}", hex::encode(pk.as_ref()), addr))
+                .collect();
+            tracing::info!(
+                bootstrap_peers = config.network.bootstrap_peers.len(),
+                "Loaded bootstrap peers from peers.json"
+            );
+        }
+
+        let genesis_path = config.data_dir.join("genesis.json");
+        let bootstrap = BootstrapConfig::load(&genesis_path)
+            .map_err(|e| eyre::eyre!("Failed to load genesis: {}", e))?;
+        tracing::info!(allocations = bootstrap.genesis_alloc.len(), "Loaded genesis configuration");
+
+        const GAS_LIMIT: u64 = 30_000_000;
+        let runner = ProductionRunner::new(scheme, config.chain_id, GAS_LIMIT, bootstrap);
+
+        runner.run_standalone(config).map_err(|e| eyre::eyre!("Runner failed: {}", e.0))
     }
 
     fn run_legacy(&self) -> eyre::Result<()> {

@@ -1,6 +1,6 @@
 use std::{num::NonZeroU32, path::Path};
 
-use commonware_codec::Read;
+use commonware_codec::{Read, ReadExt};
 use commonware_consensus::simplex::scheme::bls12381_threshold;
 use commonware_cryptography::{
     bls12381::primitives::{group::Share, sharing::Sharing, variant::MinSig},
@@ -13,11 +13,17 @@ pub type ThresholdScheme = bls12381_threshold::Scheme<ed25519::PublicKey, MinSig
 
 const SIMPLEX_NAMESPACE: &[u8] = b"_COMMONWARE_KORA_SIMPLEX";
 
-pub fn load_threshold_scheme(
-    data_dir: &Path,
-    participants: Vec<ed25519::PublicKey>,
-) -> anyhow::Result<ThresholdScheme> {
+pub fn load_threshold_scheme(data_dir: &Path) -> anyhow::Result<ThresholdScheme> {
     let output = DkgOutput::load(data_dir)?;
+
+    let participants: Vec<ed25519::PublicKey> = output
+        .participant_keys
+        .iter()
+        .map(|k| {
+            ed25519::PublicKey::read(&mut k.as_slice())
+                .map_err(|e| anyhow::anyhow!("failed to decode participant key: {:?}", e))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let n = participants.len();
     let n_cfg =

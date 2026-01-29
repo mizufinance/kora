@@ -65,6 +65,10 @@ devnet-logs:
 devnet-status:
     cd docker && just status
 
+# Live devnet monitoring dashboard
+devnet-stats:
+    cd docker && just stats
+
 # Build docker images
 docker-build:
     cd docker && just build

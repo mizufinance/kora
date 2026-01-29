@@ -10,6 +10,7 @@ use commonware_consensus::{
     types::{Epoch, FixedEpocher, ViewDelta},
 };
 use commonware_cryptography::{bls12381::primitives::variant::MinSig, ed25519};
+use commonware_p2p::Manager;
 use commonware_parallel::Sequential;
 use commonware_runtime::{Metrics as _, Spawner, buffer::PoolRef, tokio};
 use commonware_utils::{NZU64, NZUsize, acknowledgement::Exact};
@@ -128,15 +129,46 @@ impl ProductionRunner {
     }
 }
 
+impl ProductionRunner {
+    pub fn run_standalone(self, config: kora_config::NodeConfig) -> Result<(), RunnerError> {
+        use commonware_runtime::Runner;
+        use kora_transport::NetworkConfigExt;
+
+        let executor = tokio::Runner::default();
+        executor.start(|context| async move {
+            let validator_key = config
+                .validator_key()
+                .map_err(|e| anyhow::anyhow!("failed to load validator key: {}", e))?;
+
+            let transport = config
+                .network
+                .build_local_transport(validator_key, context.clone())
+                .map_err(|e| anyhow::anyhow!("failed to build transport: {}", e))?;
+
+            let ctx =
+                kora_service::NodeRunContext::new(context, std::sync::Arc::new(config), transport);
+
+            let _ledger = self.run(ctx).await?;
+
+            futures::future::pending::<()>().await;
+            Ok::<(), RunnerError>(())
+        })
+    }
+}
+
 impl NodeRunner for ProductionRunner {
     type Transport = NetworkTransport<Peer, tokio::Context>;
     type Handle = LedgerService;
     type Error = RunnerError;
 
     async fn run(&self, ctx: NodeRunContext<Self::Transport>) -> Result<Self::Handle, Self::Error> {
-        let (context, config, transport) = ctx.into_parts();
+        let (context, config, mut transport) = ctx.into_parts();
 
         info!(chain_id = self.chain_id, "Starting production validator");
+
+        let validators = self.scheme.participants().clone();
+        transport.oracle.update(0, validators).await;
+        info!(count = self.scheme.participants().len(), "Registered validators with oracle");
 
         let buffer_pool = default_buffer_pool();
         let block_cfg = block_codec_cfg();

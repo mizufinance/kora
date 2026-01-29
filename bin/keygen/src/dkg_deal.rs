@@ -17,15 +17,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Args, Debug)]
 pub struct DkgDealArgs {
-    /// Number of validators
     #[arg(long, default_value = "4")]
     pub validators: usize,
 
-    /// Threshold for signatures (t of n)
     #[arg(long, default_value = "3")]
     pub threshold: u32,
 
-    /// Base directory containing node subdirectories
     #[arg(long, default_value = "/shared")]
     pub output_dir: PathBuf,
 }
@@ -36,6 +33,7 @@ struct OutputJson {
     public_polynomial: String,
     threshold: u32,
     participants: usize,
+    participant_keys: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,7 +49,6 @@ pub fn run(args: DkgDealArgs) -> Result<()> {
         "Running trusted dealer DKG"
     );
 
-    // Load Ed25519 public keys from setup.json files
     let mut participants = Vec::with_capacity(args.validators);
     for i in 0..args.validators {
         let node_dir = args.output_dir.join(format!("node{}", i));
@@ -73,7 +70,6 @@ pub fn run(args: DkgDealArgs) -> Result<()> {
         tracing::debug!(node = i, pk = %pk_hex, "Loaded participant");
     }
 
-    // Create ordered set for DKG
     let participants_set: Set<commonware_cryptography::ed25519::PublicKey> = participants
         .iter()
         .cloned()
@@ -87,13 +83,30 @@ pub fn run(args: DkgDealArgs) -> Result<()> {
         dkg::deal::<MinSig, _, N3f1>(&mut rng, Mode::default(), participants_set)
             .map_err(|e| eyre::eyre!("DKG deal failed: {:?}", e))?;
 
-    let group_key = public_output.public();
+    let sharing = public_output.public();
+
+    let mut public_polynomial_bytes = Vec::new();
+    sharing.write(&mut public_polynomial_bytes);
+
+    let group_key = sharing.public();
     let mut group_key_bytes = Vec::new();
     group_key.write(&mut group_key_bytes);
 
-    tracing::info!(group_key = hex::encode(&group_key_bytes), "Generated group public key");
+    tracing::info!(
+        group_key = hex::encode(&group_key_bytes),
+        polynomial_len = public_polynomial_bytes.len(),
+        "Generated group public key and polynomial"
+    );
 
-    // Save shares to each node directory
+    let participant_keys: Vec<String> = participants
+        .iter()
+        .map(|pk| {
+            let mut bytes = Vec::new();
+            pk.write(&mut bytes);
+            hex::encode(bytes)
+        })
+        .collect();
+
     for (i, pk) in participants.iter().enumerate() {
         let share =
             shares.get_value(pk).ok_or_else(|| eyre::eyre!("Missing share for node{}", i))?;
@@ -105,9 +118,10 @@ pub fn run(args: DkgDealArgs) -> Result<()> {
 
         let output_json = OutputJson {
             group_public_key: hex::encode(&group_key_bytes),
-            public_polynomial: String::new(),
+            public_polynomial: hex::encode(&public_polynomial_bytes),
             threshold: args.threshold,
             participants: args.validators,
+            participant_keys: participant_keys.clone(),
         };
         let output_path = node_dir.join("output.json");
         fs::write(&output_path, serde_json::to_string_pretty(&output_json)?)?;

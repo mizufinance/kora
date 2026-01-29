@@ -13,7 +13,7 @@ mod events;
 pub use events::{LedgerEvent, LedgerEvents};
 
 mod bootstrap;
-pub use bootstrap::BootstrapConfig;
+pub use bootstrap::{BootstrapConfig, BootstrapError};
 
 mod block;
 pub use block::{Block, BlockCfg};

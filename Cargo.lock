@@ -3110,6 +3110,8 @@ dependencies = [
  "kora-cli",
  "kora-config",
  "kora-dkg",
+ "kora-domain",
+ "kora-runner",
  "kora-service",
  "serde_json",
  "tokio",
@@ -3236,6 +3238,8 @@ dependencies = [
  "commonware-cryptography",
  "futures",
  "k256",
+ "serde",
+ "serde_json",
  "sha3",
 ]
 
