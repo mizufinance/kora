@@ -126,7 +126,7 @@ services:
     ports:
       - "30302:30303"
     healthcheck:
-      test: ["/scripts/healthcheck.sh"]
+      test: ["CMD", "/scripts/healthcheck.sh"]
       interval: 5s
       timeout: 3s
       retries: 120
@@ -154,7 +154,7 @@ services:
     ports:
       - "30303:30303"
     healthcheck:
-      test: ["/scripts/healthcheck.sh"]
+      test: ["CMD", "/scripts/healthcheck.sh"]
       interval: 5s
       timeout: 3s
       retries: 120
