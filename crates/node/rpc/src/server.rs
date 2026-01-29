@@ -1,17 +1,10 @@
 //! HTTP RPC server implementation.
 
-use std::net::SocketAddr;
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::{
-    Router,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-};
+use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use tower_http::cors::CorsLayer;
-use tracing::{info, error};
+use tracing::{error, info};
 
 use crate::state::NodeState;
 
@@ -24,7 +17,7 @@ pub struct RpcServer {
 
 impl RpcServer {
     /// Create a new RPC server.
-    pub fn new(state: NodeState, addr: SocketAddr) -> Self {
+    pub const fn new(state: NodeState, addr: SocketAddr) -> Self {
         Self { state, addr }
     }
 

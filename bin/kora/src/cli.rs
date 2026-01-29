@@ -142,14 +142,14 @@ impl Cli {
         tracing::info!(allocations = bootstrap.genesis_alloc.len(), "Loaded genesis configuration");
 
         const GAS_LIMIT: u64 = 30_000_000;
-        
+
         // Create RPC state that will be updated by consensus
         let rpc_port = 8545 + dkg_output.share_index as u16;
         let rpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", rpc_port).parse()?;
         let node_state = NodeState::new(config.chain_id, dkg_output.share_index);
-        
+
         let runner = ProductionRunner::new(scheme, config.chain_id, GAS_LIMIT, bootstrap)
-            .with_rpc(node_state.clone(), rpc_addr);
+            .with_rpc(node_state, rpc_addr);
 
         runner.run_standalone(config).map_err(|e| eyre::eyre!("Runner failed: {}", e.0))
     }

@@ -38,7 +38,7 @@ impl DkgOutput {
             public_polynomial: hex::encode(&self.public_polynomial),
             threshold: self.threshold,
             participants: self.participants,
-            participant_keys: self.participant_keys.iter().map(|k| hex::encode(k)).collect(),
+            participant_keys: self.participant_keys.iter().map(hex::encode).collect(),
         };
 
         let output_path = data_dir.join("output.json");

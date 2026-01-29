@@ -1,27 +1,26 @@
 //! REVM-based consensus application implementation.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Instant};
 
 use alloy_consensus::Header;
 use alloy_primitives::{Address, B256, Bytes};
 use commonware_consensus::{
-    Block as _,
-    marshal::ingress::mailbox::AncestorStream, simplex::types::Context, Application,
-    VerifyingApplication,
+    Application, Block as _, VerifyingApplication, marshal::ingress::mailbox::AncestorStream,
+    simplex::types::Context,
 };
 use commonware_cryptography::{Committable as _, certificate::Scheme as CertScheme};
 use commonware_runtime::{Clock, Metrics, Spawner};
 use futures::StreamExt;
 use kora_consensus::{BlockExecution, SnapshotStore, components::InMemorySnapshotStore};
-use kora_domain::{Block, ConsensusDigest, Tx};
+use kora_domain::{Block, ConsensusDigest};
 use kora_executor::{BlockContext, BlockExecutor};
 use kora_ledger::LedgerService;
 use kora_overlay::OverlayState;
 use kora_qmdb_ledger::QmdbState;
 use rand::Rng;
-use std::time::Instant;
-use tracing::{debug, info, trace, warn};
+use tracing::{info, trace, warn};
 
+/// REVM-based consensus application.
 #[derive(Clone)]
 pub struct RevmApplication<S, E> {
     ledger: LedgerService,
@@ -44,14 +43,9 @@ impl<S, E> RevmApplication<S, E>
 where
     E: BlockExecutor<OverlayState<QmdbState>, Tx = Bytes> + Clone,
 {
-    pub fn new(ledger: LedgerService, executor: E, max_txs: usize, gas_limit: u64) -> Self {
-        Self {
-            ledger,
-            executor,
-            max_txs,
-            gas_limit,
-            _scheme: std::marker::PhantomData,
-        }
+    /// Create a new REVM application.
+    pub const fn new(ledger: LedgerService, executor: E, max_txs: usize, gas_limit: u64) -> Self {
+        Self { ledger, executor, max_txs, gas_limit, _scheme: std::marker::PhantomData }
     }
 
     fn block_context(&self, height: u64, prevrandao: B256) -> BlockContext {
@@ -72,7 +66,7 @@ where
 
     async fn build_block(&self, parent: &Block) -> Option<Block> {
         use kora_consensus::Mempool as _;
-        
+
         let start = Instant::now();
         let parent_digest = parent.commitment();
         let parent_snapshot = self.ledger.parent_snapshot(parent_digest).await?;
@@ -88,10 +82,7 @@ where
         let txs_bytes: Vec<Bytes> = txs.iter().map(|tx| tx.bytes.clone()).collect();
 
         let exec_start = Instant::now();
-        let outcome = self
-            .executor
-            .execute(&parent_snapshot.state, &context, &txs_bytes)
-            .ok()?;
+        let outcome = self.executor.execute(&parent_snapshot.state, &context, &txs_bytes).ok()?;
         let exec_elapsed = exec_start.elapsed();
 
         let root_start = Instant::now();
@@ -102,13 +93,7 @@ where
             .ok()?;
         let root_elapsed = root_start.elapsed();
 
-        let block = Block {
-            parent: parent.id(),
-            height,
-            prevrandao,
-            state_root,
-            txs,
-        };
+        let block = Block { parent: parent.id(), height, prevrandao, state_root, txs };
 
         let merged_changes = parent_snapshot.state.merge_changes(outcome.changes.clone());
         let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
@@ -267,11 +252,11 @@ where
             let start = Instant::now();
             let parent = ancestry.next().await?;
             let ancestry_elapsed = start.elapsed();
-            
+
             let build_start = Instant::now();
             let block = self.build_block(&parent).await;
             let build_elapsed = build_start.elapsed();
-            
+
             if let Some(ref b) = block {
                 info!(
                     height = b.height,
@@ -281,7 +266,7 @@ where
                     "propose complete"
                 );
             }
-            
+
             block
         }
     }

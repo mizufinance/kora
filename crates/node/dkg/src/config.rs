@@ -16,11 +16,11 @@ pub struct DkgConfig {
 }
 
 impl DkgConfig {
-    pub fn n(&self) -> usize {
+    pub const fn n(&self) -> usize {
         self.participants.len()
     }
 
-    pub fn t(&self) -> u32 {
+    pub const fn t(&self) -> u32 {
         self.threshold
     }
 

@@ -19,10 +19,7 @@ pub struct DkgCeremony {
 
 impl DkgCeremony {
     pub fn new(config: DkgConfig) -> Self {
-        Self {
-            config,
-            state: Arc::new(Mutex::new(DkgState::new(0))),
-        }
+        Self { config, state: Arc::new(Mutex::new(DkgState::new(0))) }
     }
 
     pub async fn run(&self) -> Result<DkgOutput, DkgError> {
@@ -54,10 +51,7 @@ impl DkgCeremony {
                 .map_err(|e| DkgError::Crypto(format!("DKG deal failed: {:?}", e)))?;
 
         let my_pk = self.config.my_public_key();
-        let my_share = shares
-            .get_value(&my_pk)
-            .ok_or(DkgError::MissingShare)?
-            .clone();
+        let my_share = shares.get_value(&my_pk).ok_or(DkgError::MissingShare)?.clone();
 
         info!("DKG ceremony completed successfully");
 
@@ -86,7 +80,7 @@ impl DkgCeremony {
         let output = DkgOutput {
             group_public_key: group_key_bytes,
             public_polynomial: polynomial_bytes,
-            threshold: self.config.t() as u32,
+            threshold: self.config.t(),
             participants: self.config.n(),
             share_index: self.config.validator_index as u32,
             share_secret: share_bytes,

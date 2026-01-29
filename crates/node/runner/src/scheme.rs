@@ -9,10 +9,12 @@ use commonware_cryptography::{
 use commonware_utils::ordered::Set;
 use kora_dkg::DkgOutput;
 
+/// BLS12-381 threshold signature scheme used for consensus.
 pub type ThresholdScheme = bls12381_threshold::Scheme<ed25519::PublicKey, MinSig>;
 
 const SIMPLEX_NAMESPACE: &[u8] = b"_COMMONWARE_KORA_SIMPLEX";
 
+/// Load a threshold signing scheme from DKG output files.
 pub fn load_threshold_scheme(data_dir: &Path) -> anyhow::Result<ThresholdScheme> {
     let output = DkgOutput::load(data_dir)?;
 

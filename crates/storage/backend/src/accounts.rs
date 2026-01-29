@@ -57,7 +57,7 @@ impl std::fmt::Debug for AccountStore {
 /// Error type for account store operations.
 pub type AccountStoreError = BackendError;
 
-fn account_key(address: Address) -> AccountKey {
+const fn account_key(address: Address) -> AccountKey {
     AccountKey::new(address.into_array())
 }
 

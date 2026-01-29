@@ -1,8 +1,12 @@
 //! Node state management for RPC endpoints.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Instant;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
+};
 
 use parking_lot::RwLock;
 use serde::Serialize;

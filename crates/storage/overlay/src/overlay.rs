@@ -87,10 +87,10 @@ impl<S: StateDbRead> StateDbRead for OverlayState<S> {
         let changes = Arc::clone(&self.changes);
         async move {
             for update in changes.accounts.values() {
-                if update.code_hash == code_hash {
-                    if let Some(code) = &update.code {
-                        return Ok(Bytes::from(code.clone()));
-                    }
+                if update.code_hash == code_hash
+                    && let Some(code) = &update.code
+                {
+                    return Ok(Bytes::from(code.clone()));
                 }
             }
             base.code(&code_hash).await

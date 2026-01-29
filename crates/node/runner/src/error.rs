@@ -1,5 +1,6 @@
 use std::fmt;
 
+/// Error type for node runner operations.
 #[derive(Debug)]
 pub struct RunnerError(pub anyhow::Error);
 

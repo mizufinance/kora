@@ -105,17 +105,25 @@ fn spawn_ledger_observers<S: Spawner>(service: LedgerService, spawner: S) {
     });
 }
 
-#[derive(Clone)]
+/// Production validator node runner.
+#[derive(Clone, Debug)]
 pub struct ProductionRunner {
+    /// Threshold signing scheme.
     pub scheme: ThresholdScheme,
+    /// Chain ID.
     pub chain_id: u64,
+    /// Gas limit per block.
     pub gas_limit: u64,
+    /// Bootstrap configuration.
     pub bootstrap: BootstrapConfig,
+    /// Storage partition prefix.
     pub partition_prefix: String,
+    /// Optional RPC configuration (state, bind address).
     pub rpc_config: Option<(kora_rpc::NodeState, std::net::SocketAddr)>,
 }
 
 impl ProductionRunner {
+    /// Create a new production runner.
     pub fn new(
         scheme: ThresholdScheme,
         chain_id: u64,
@@ -132,6 +140,7 @@ impl ProductionRunner {
         }
     }
 
+    /// Configure RPC server.
     pub fn with_rpc(mut self, state: kora_rpc::NodeState, addr: std::net::SocketAddr) -> Self {
         self.rpc_config = Some((state, addr));
         self
@@ -139,6 +148,7 @@ impl ProductionRunner {
 }
 
 impl ProductionRunner {
+    /// Run the validator as a standalone process.
     pub fn run_standalone(self, config: kora_config::NodeConfig) -> Result<(), RunnerError> {
         use commonware_runtime::Runner;
         use kora_transport::NetworkConfigExt;
@@ -150,7 +160,7 @@ impl ProductionRunner {
             // Start RPC server if configured
             if let Some((state, addr)) = rpc_config {
                 let rpc = kora_rpc::RpcServer::new(state, addr);
-                let _ = rpc.start();
+                drop(rpc.start());
             }
 
             let validator_key = config
@@ -230,12 +240,11 @@ impl NodeRunner for ProductionRunner {
         broadcast_engine.start(transport.marshal.blocks);
 
         let partition_prefix = &self.partition_prefix;
-        let cert_codec_config =
-            <ThresholdScheme as commonware_cryptography::certificate::Scheme>::certificate_codec_config_unbounded();
+        <ThresholdScheme as commonware_cryptography::certificate::Scheme>::certificate_codec_config_unbounded();
         let finalizations_by_height = ArchiveInitializer::init::<_, ConsensusDigest, CertArchive>(
             context.with_label("finalizations_by_height"),
             format!("{partition_prefix}-finalizations-by-height"),
-            cert_codec_config,
+            (),
         )
         .await
         .context("init finalizations archive")?;
@@ -268,12 +277,8 @@ impl NodeRunner for ProductionRunner {
             block_cfg.max_txs,
             self.gas_limit,
         );
-        let marshaled = Marshaled::new(
-            context.with_label("marshaled"),
-            app,
-            marshal_mailbox.clone(),
-            epocher,
-        );
+        let marshaled =
+            Marshaled::new(context.with_label("marshaled"), app, marshal_mailbox.clone(), epocher);
 
         let seed_reporter = SeedReporter::<MinSig>::new(ledger.clone());
         let node_state_reporter = self
@@ -313,11 +318,7 @@ impl NodeRunner for ProductionRunner {
                 buffer_pool,
             },
         );
-        engine.start(
-            transport.simplex.votes,
-            transport.simplex.certs,
-            transport.simplex.resolver,
-        );
+        engine.start(transport.simplex.votes, transport.simplex.certs, transport.simplex.resolver);
 
         info!("Validator started successfully");
         Ok(ledger)
