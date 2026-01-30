@@ -705,10 +705,7 @@ impl DkgParticipant {
         info!("Broadcasting ready signal");
         self.outgoing.push((
             None, // broadcast
-            ProtocolMessage::new(
-                ceremony_id,
-                ProtocolMessageKind::Ready { player: my_pk.clone() },
-            ),
+            ProtocolMessage::new(ceremony_id, ProtocolMessageKind::Ready { player: my_pk.clone() }),
         ));
         self.ready_players.insert(my_pk);
         self.sent_ready = true;
@@ -757,13 +754,7 @@ impl DkgParticipant {
             let has_pub = self.dealer_pub_msgs.contains_key(dealer_pk);
             let has_priv = self.dealer_priv_msgs.contains_key(dealer_pk);
             let sent_ack = self.acks_sent.contains(dealer_pk);
-            debug!(
-                ?dealer_pk,
-                has_pub,
-                has_priv,
-                sent_ack,
-                "Dealer log status"
-            );
+            debug!(?dealer_pk, has_pub, has_priv, sent_ack, "Dealer log status");
         }
 
         let player = self
@@ -772,17 +763,10 @@ impl DkgParticipant {
             .ok_or_else(|| DkgError::CeremonyFailed("Player already consumed".into()))?;
 
         // Debug: Log dealer log keys vs our config participants
-        let log_dealers: Vec<_> = self
-            .dealer_logs
-            .keys()
-            .map(|d| hex::encode(d.as_ref()))
-            .collect();
-        let config_participants: Vec<_> = self
-            .config
-            .participants
-            .iter()
-            .map(|p| hex::encode(p.as_ref()))
-            .collect();
+        let log_dealers: Vec<_> =
+            self.dealer_logs.keys().map(|d| hex::encode(d.as_ref())).collect();
+        let config_participants: Vec<_> =
+            self.config.participants.iter().map(|p| hex::encode(p.as_ref())).collect();
         debug!(
             log_dealers = ?log_dealers,
             config_participants = ?config_participants,
