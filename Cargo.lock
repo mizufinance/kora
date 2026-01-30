@@ -3245,6 +3245,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "kora-e2e"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-primitives",
+ "anyhow",
+ "commonware-consensus",
+ "commonware-cryptography",
+ "commonware-p2p",
+ "commonware-parallel",
+ "commonware-runtime",
+ "commonware-utils",
+ "futures",
+ "k256",
+ "kora-consensus",
+ "kora-crypto",
+ "kora-domain",
+ "kora-executor",
+ "kora-ledger",
+ "kora-marshal",
+ "kora-overlay",
+ "kora-qmdb-ledger",
+ "kora-reporters",
+ "kora-simplex",
+ "kora-transport-sim",
+ "rand 0.8.5",
+ "rstest",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kora-executor"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,61 @@
+[package]
+name = "kora-e2e"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "End-to-end tests for Kora consensus network"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Local crates
+# kora-config.workspace = true # not currently used
+kora-consensus.workspace = true
+kora-crypto = { workspace = true, features = ["test-utils"] }
+kora-domain = { workspace = true, features = ["evm"] }
+kora-executor.workspace = true
+kora-ledger.workspace = true
+kora-marshal.workspace = true
+kora-overlay.workspace = true
+kora-qmdb-ledger.workspace = true
+kora-reporters.workspace = true
+# kora-service.workspace = true # not currently used
+kora-simplex.workspace = true
+kora-transport-sim.workspace = true
+
+# Commonware
+# commonware-codec.workspace = true # not currently used
+commonware-consensus.workspace = true
+commonware-cryptography.workspace = true
+commonware-p2p.workspace = true
+commonware-parallel.workspace = true
+commonware-runtime.workspace = true
+commonware-utils.workspace = true
+
+# Alloy
+alloy-primitives.workspace = true
+alloy-consensus.workspace = true
+
+# Async
+futures.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+# Misc
+rand.workspace = true
+
+# Crypto
+k256.workspace = true
+
+# Error handling
+anyhow.workspace = true
+thiserror.workspace = true
+
+# Tracing
+tracing.workspace = true
+# tracing-subscriber.workspace = true # not currently used
+
+[dev-dependencies]
+rstest.workspace = true

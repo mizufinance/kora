@@ -128,6 +128,47 @@ impl ActorInitializer {
 
         Actor::init(context, finalizations_by_height, finalized_blocks, config).await
     }
+
+    /// Initializes the marshal actor with a custom partition prefix.
+    ///
+    /// This is the same as [`init`](Self::init) but allows specifying a custom partition prefix
+    /// for storage isolation. Useful for testing multiple nodes in the same process.
+    #[allow(clippy::type_complexity)]
+    pub async fn init_with_partition<E, B, P, FC, FB, A>(
+        context: E,
+        finalizations_by_height: FC,
+        finalized_blocks: FB,
+        provider: P,
+        buffer_pool: PoolRef,
+        block_codec_config: B::Cfg,
+        partition_prefix: impl Into<String>,
+    ) -> (Actor<E, B, P, FC, FB, FixedEpocher, Sequential, A>, Mailbox<P::Scheme, B>, Height)
+    where
+        E: CryptoRngCore + Spawner + Metrics + Clock + Storage,
+        B: Block,
+        P: Provider<Scope = Epoch, Scheme: Scheme<B::Commitment>>,
+        FC: Certificates<Commitment = B::Commitment, Scheme = P::Scheme>,
+        FB: Blocks<Block = B>,
+        A: Acknowledgement,
+    {
+        let config = Config {
+            provider,
+            epocher: FixedEpocher::new(Self::DEFAULT_BLOCKS_PER_EPOCH),
+            partition_prefix: partition_prefix.into(),
+            mailbox_size: Self::DEFAULT_MAILBOX_SIZE,
+            view_retention_timeout: Self::DEFAULT_VIEW_RETENTION_TIMEOUT,
+            prunable_items_per_section: Self::DEFAULT_PRUNABLE_ITEMS_PER_SECTION,
+            buffer_pool,
+            replay_buffer: Self::DEFAULT_REPLAY_BUFFER,
+            key_write_buffer: Self::DEFAULT_KEY_WRITE_BUFFER,
+            value_write_buffer: Self::DEFAULT_VALUE_WRITE_BUFFER,
+            block_codec_config,
+            max_repair: Self::DEFAULT_MAX_REPAIR,
+            strategy: Sequential,
+        };
+
+        Actor::init(context, finalizations_by_height, finalized_blocks, config).await
+    }
 }
 
 #[cfg(test)]
