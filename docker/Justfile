@@ -9,7 +9,12 @@ build:
 build-fresh:
     docker buildx bake --allow=fs.read=.. -f docker-bake.hcl kora-local --no-cache
 
+# Start devnet with interactive DKG (production-like)
 devnet:
+    ./scripts/devnet-run.sh --interactive-dkg
+
+# Start devnet with trusted dealer DKG (fast, insecure, for local dev)
+trusted-devnet:
     ./scripts/devnet-run.sh
 
 devnet-minimal:
@@ -44,7 +49,7 @@ logs:
     docker compose -f compose/devnet.yaml logs -f validator-node0 validator-node1 validator-node2 validator-node3
 
 logs-dkg:
-    docker compose -f compose/devnet.yaml logs -f dkg-node0 dkg-node1 dkg-node2 dkg-node3
+    docker compose -f compose/devnet.yaml --profile interactive-dkg logs -f dkg-node0 dkg-node1 dkg-node2 dkg-node3
 
 logs-node node:
     docker compose -f compose/devnet.yaml logs -f {{node}}
@@ -54,23 +59,34 @@ exec node:
 
 redo-dkg:
     #!/bin/bash
+    echo "Stopping validators..."
     docker compose -f compose/devnet.yaml stop validator-node0 validator-node1 validator-node2 validator-node3
     
+    echo "Removing old DKG shares..."
     for i in 0 1 2 3; do
         docker run --rm -v kora-devnet_data_node${i}:/data alpine rm -f /data/share.key /data/output.json
     done
     
-    docker compose -f compose/devnet.yaml up -d dkg-node0 dkg-node1 dkg-node2 dkg-node3
+    echo "Starting interactive DKG ceremony..."
+    docker compose -f compose/devnet.yaml --profile interactive-dkg up -d dkg-node0 dkg-node1 dkg-node2 dkg-node3
     
-    echo "Waiting for DKG..."
+    echo "Waiting for DKG ceremony to complete..."
+    timeout=300
     while true; do
-        HEALTHY=$(docker compose -f compose/devnet.yaml ps --format json 2>/dev/null | \
-            jq -r 'select(.Service | startswith("dkg-")) | select(.Health == "healthy") | .Service' | wc -l)
-        [[ "$HEALTHY" -ge 4 ]] && break
+        EXITED=$(docker compose -f compose/devnet.yaml ps --format json 2>/dev/null | \
+            jq -r 'select(.Service | startswith("dkg-")) | select(.State == "exited") | select(.ExitCode == 0) | .Service' 2>/dev/null | wc -l | tr -d ' ')
+        FAILED=$(docker compose -f compose/devnet.yaml ps --format json 2>/dev/null | \
+            jq -r 'select(.Service | startswith("dkg-")) | select(.State == "exited") | select(.ExitCode != 0) | .Service' 2>/dev/null | wc -l | tr -d ' ')
+        
+        [[ "$FAILED" -gt 0 ]] && echo "DKG ceremony failed!" && exit 1
+        [[ "$EXITED" -ge 4 ]] && break
+        
+        timeout=$((timeout - 2))
+        [[ $timeout -le 0 ]] && echo "DKG timeout!" && exit 1
         sleep 2
     done
     
-    docker compose -f compose/devnet.yaml stop dkg-node0 dkg-node1 dkg-node2 dkg-node3
+    docker compose -f compose/devnet.yaml --profile interactive-dkg stop dkg-node0 dkg-node1 dkg-node2 dkg-node3 2>/dev/null || true
     docker compose -f compose/devnet.yaml up -d validator-node0 validator-node1 validator-node2 validator-node3
     echo "DKG complete. Validators restarted."
 

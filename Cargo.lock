@@ -3320,6 +3320,7 @@ dependencies = [
  "commonware-consensus",
  "commonware-cryptography",
  "commonware-p2p",
+ "commonware-parallel",
  "commonware-runtime",
  "commonware-utils",
  "futures",

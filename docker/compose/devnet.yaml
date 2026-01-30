@@ -36,6 +36,30 @@ x-validator-common: &validator-common
     - HEALTHCHECK_MODE=ready
 
 services:
+  # Setup only (for interactive DKG) - generates keys and peers.json but no shares
+  init-setup:
+    <<: *node-common
+    user: root
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "[init] Running keygen setup..." && \
+        /usr/local/bin/keygen setup \
+          --validators=4 \
+          --threshold=3 \
+          --chain-id=${CHAIN_ID:-1337} \
+          --output-dir=/shared && \
+        echo "[init] Setting permissions..." && \
+        chown -R 1000:1000 /shared/node0 /shared/node1 /shared/node2 /shared/node3 && \
+        echo "[init] Setup complete (run DKG ceremony next)"
+    volumes:
+      - shared_config:/shared
+      - data_node0:/shared/node0
+      - data_node1:/shared/node1
+      - data_node2:/shared/node2
+      - data_node3:/shared/node3
+
+  # Setup + trusted dealer DKG (for fast local dev)
   init-config:
     <<: *node-common
     user: root
@@ -63,12 +87,13 @@ services:
       - data_node2:/shared/node2
       - data_node3:/shared/node3
 
+  # Interactive DKG nodes - run ceremony then exit
   dkg-node0:
     <<: *node-common
-    profiles: ["distributed-dkg"]
+    profiles: ["interactive-dkg"]
     hostname: node0
     depends_on:
-      init-config:
+      init-setup:
         condition: service_completed_successfully
     entrypoint: ["/scripts/entrypoint.sh", "dkg"]
     volumes:
@@ -79,22 +104,16 @@ services:
       - CHAIN_ID=${CHAIN_ID:-1337}
       - VALIDATOR_INDEX=0
       - IS_BOOTSTRAP=true
-      - HEALTHCHECK_MODE=dkg
+      - IS_LEADER=true
     ports:
       - "30300:30303"
-    healthcheck:
-      test: ["CMD", "/scripts/healthcheck.sh"]
-      interval: 5s
-      timeout: 3s
-      retries: 120
-      start_period: 10s
 
   dkg-node1:
     <<: *node-common
-    profiles: ["distributed-dkg"]
+    profiles: ["interactive-dkg"]
     hostname: node1
     depends_on:
-      init-config:
+      init-setup:
         condition: service_completed_successfully
       dkg-node0:
         condition: service_started
@@ -108,22 +127,15 @@ services:
       - VALIDATOR_INDEX=1
       - IS_BOOTSTRAP=false
       - BOOTSTRAP_PEERS=node0:30303
-      - HEALTHCHECK_MODE=dkg
     ports:
       - "30301:30303"
-    healthcheck:
-      test: ["CMD", "/scripts/healthcheck.sh"]
-      interval: 5s
-      timeout: 3s
-      retries: 120
-      start_period: 10s
 
   dkg-node2:
     <<: *node-common
-    profiles: ["distributed-dkg"]
+    profiles: ["interactive-dkg"]
     hostname: node2
     depends_on:
-      init-config:
+      init-setup:
         condition: service_completed_successfully
       dkg-node0:
         condition: service_started
@@ -137,22 +149,15 @@ services:
       - VALIDATOR_INDEX=2
       - IS_BOOTSTRAP=false
       - BOOTSTRAP_PEERS=node0:30303
-      - HEALTHCHECK_MODE=dkg
     ports:
       - "30302:30303"
-    healthcheck:
-      test: ["CMD", "/scripts/healthcheck.sh"]
-      interval: 5s
-      timeout: 3s
-      retries: 120
-      start_period: 10s
 
   dkg-node3:
     <<: *node-common
-    profiles: ["distributed-dkg"]
+    profiles: ["interactive-dkg"]
     hostname: node3
     depends_on:
-      init-config:
+      init-setup:
         condition: service_completed_successfully
       dkg-node0:
         condition: service_started
@@ -166,15 +171,8 @@ services:
       - VALIDATOR_INDEX=3
       - IS_BOOTSTRAP=false
       - BOOTSTRAP_PEERS=node0:30303
-      - HEALTHCHECK_MODE=dkg
     ports:
       - "30303:30303"
-    healthcheck:
-      test: ["CMD", "/scripts/healthcheck.sh"]
-      interval: 5s
-      timeout: 3s
-      retries: 120
-      start_period: 10s
 
   validator-node0:
     <<: *validator-common

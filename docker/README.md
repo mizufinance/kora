@@ -1,16 +1,29 @@
 # Kora Docker Devnet
 
-This directory contains Docker configurations for running a local Kora devnet with trusted dealer DKG (Distributed Key Generation).
+This directory contains Docker configurations for running a local Kora devnet with either:
+- **Interactive DKG** (production-like, no single party learns the master secret)
+- **Trusted Dealer DKG** (fast, insecure, for local development)
 
 ## Quick Start
 
 From the repository root:
 
 ```bash
+# Production-like devnet with interactive DKG ceremony
 just devnet
+
+# Fast devnet with trusted dealer (for quick iteration)
+just trusted-devnet
 ```
 
-This will:
+### Interactive DKG (default)
+1. Build the Docker image
+2. Generate validator identity keys (init-setup)
+3. Run interactive DKG ceremony across 4 nodes
+4. Start 4 validator nodes with threshold BLS consensus
+5. Start Prometheus and Grafana for observability (optional)
+
+### Trusted Dealer (fast)
 1. Build the Docker image
 2. Generate validator identity keys and run trusted dealer DKG (init-config)
 3. Start 4 validator nodes with threshold BLS consensus
@@ -24,7 +37,8 @@ Run from repository root (`just <cmd>`) or from `docker/` directory (`just <cmd>
 
 | Command | Description |
 |---------|-------------|
-| `just devnet` | Start the full devnet with observability |
+| `just devnet` | Start devnet with interactive DKG (production-like) |
+| `just trusted-devnet` | Start devnet with trusted dealer DKG (fast, insecure) |
 | `just devnet-down` | Stop all containers (preserves state) |
 | `just devnet-reset` | Stop and delete all state (fresh DKG on next start) |
 | `just devnet-logs` | Stream validator logs |
@@ -38,7 +52,8 @@ Run from repository root (`just <cmd>`) or from `docker/` directory (`just <cmd>
 |---------|-------------|
 | `just build` | Build the Docker image |
 | `just build-fresh` | Build the Docker image without cache |
-| `just devnet` | Start the full devnet with observability |
+| `just devnet` | Start devnet with interactive DKG (production-like) |
+| `just trusted-devnet` | Start devnet with trusted dealer DKG (fast, insecure) |
 | `just devnet-minimal` | Start devnet without observability stack |
 | `just down` | Stop all containers (preserves state) |
 | `just reset` | Stop and delete all state (fresh DKG on next start) |
@@ -56,28 +71,56 @@ Run from repository root (`just <cmd>`) or from `docker/` directory (`just <cmd>
 
 ## Architecture
 
+### Interactive DKG Flow (default)
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Kora Devnet                              │
+│                   Kora Devnet (Interactive DKG)                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  init-config (runs once)                                        │
-│    - Generates ed25519 identity keys                            │
-│    - Runs trusted dealer DKG                                    │
-│    - Creates peers.json and genesis.json                        │
-│    - Outputs: output.json + share.key per node                  │
+│  init-setup (runs once)                                          │
+│    - Generates ed25519 identity keys                             │
+│    - Creates peers.json and genesis.json                         │
+│    - Does NOT generate threshold shares                          │
 ├─────────────────────────────────────────────────────────────────┤
-│  Validators (validator-node0..3)                                │
-│    - BLS12-381 threshold consensus                              │
-│    - REVM execution                                             │
-│    - QMDB state storage                                         │
+│  DKG Ceremony (dkg-node0..3, one-shot jobs)                      │
+│    - Interactive Joint-Feldman DKG protocol                      │
+│    - Each node contributes to key generation                     │
+│    - No single node learns the master secret                     │
+│    - Outputs: output.json + share.key per node                   │
 ├─────────────────────────────────────────────────────────────────┤
-│  Observability (optional): prometheus + grafana                 │
-│    - Prometheus: http://localhost:9090                          │
-│    - Grafana: http://localhost:3000 (admin/admin)               │
+│  Validators (validator-node0..3)                                 │
+│    - BLS12-381 threshold consensus                               │
+│    - REVM execution                                              │
+│    - QMDB state storage                                          │
+├─────────────────────────────────────────────────────────────────┤
+│  Observability (optional): prometheus + grafana                  │
+│    - Prometheus: http://localhost:9090                           │
+│    - Grafana: http://localhost:3000 (admin/admin)                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**Note:** Distributed DKG nodes (dkg-node0..3) are available under the `distributed-dkg` profile but are not used by default. The default setup uses trusted dealer DKG via `init-config`.
+### Trusted Dealer Flow (fast)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  Kora Devnet (Trusted Dealer)                    │
+├─────────────────────────────────────────────────────────────────┤
+│  init-config (runs once)                                         │
+│    - Generates ed25519 identity keys                             │
+│    - Runs trusted dealer DKG (single party generates all shares) │
+│    - Creates peers.json and genesis.json                         │
+│    - Outputs: output.json + share.key per node                   │
+├─────────────────────────────────────────────────────────────────┤
+│  Validators (validator-node0..3)                                 │
+│    - BLS12-381 threshold consensus                               │
+│    - REVM execution                                              │
+│    - QMDB state storage                                          │
+├─────────────────────────────────────────────────────────────────┤
+│  Observability (optional): prometheus + grafana                  │
+│    - Prometheus: http://localhost:9090                           │
+│    - Grafana: http://localhost:3000 (admin/admin)                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Security Note:** The trusted dealer flow is only for local development. Use the interactive DKG flow for production-like testing.
 
 ## Endpoints
 

@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -e
 
+# Parse arguments
+INTERACTIVE_DKG=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --interactive-dkg)
+            INTERACTIVE_DKG=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -62,7 +76,11 @@ run_with_spinner() {
 print_header() {
     echo ""
     echo -e "${BOLD}${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BOLD}${BLUE}║${NC}            ${BOLD}KORA DEVNET${NC}                                    ${BOLD}${BLUE}║${NC}"
+    if [[ "$INTERACTIVE_DKG" == "true" ]]; then
+        echo -e "${BOLD}${BLUE}║${NC}        ${BOLD}KORA DEVNET${NC} ${GREEN}(Interactive DKG)${NC}                 ${BOLD}${BLUE}║${NC}"
+    else
+        echo -e "${BOLD}${BLUE}║${NC}        ${BOLD}KORA DEVNET${NC} ${YELLOW}(Trusted Dealer)${NC}                  ${BOLD}${BLUE}║${NC}"
+    fi
     echo -e "${BOLD}${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${DIM}Chain ID:${NC} ${CHAIN_ID:-1337}  ${DIM}│${NC}  ${DIM}Validators:${NC} 4  ${DIM}│${NC}  ${DIM}Threshold:${NC} 3"
@@ -128,20 +146,86 @@ echo ""
 # Phase 1: Configuration
 print_phase "1/3" "Configuration"
 if [[ "$CONFIG_EXISTS" != "true" ]]; then
-    if run_with_spinner "Generating peer configuration..." docker compose -f compose/devnet.yaml run --rm init-config; then
-        print_success "Generated peer configuration"
+    if [[ "$INTERACTIVE_DKG" == "true" ]]; then
+        # Interactive DKG: only run setup (no dkg-deal)
+        if run_with_spinner "Generating peer configuration..." docker compose -f compose/devnet.yaml run --rm init-setup; then
+            print_success "Generated peer configuration"
+        else
+            print_error "Configuration failed"
+            exit 1
+        fi
     else
-        print_error "Configuration failed"
-        exit 1
+        # Trusted dealer: run setup + dkg-deal
+        if run_with_spinner "Generating peer configuration..." docker compose -f compose/devnet.yaml run --rm init-config; then
+            print_success "Generated peer configuration"
+        else
+            print_error "Configuration failed"
+            exit 1
+        fi
     fi
 else
     print_skip "Peer configuration exists"
 fi
 
-if [[ "$SHARES_EXIST" != "true" ]]; then
-    print_success "Threshold shares generated (trusted dealer)"
+if [[ "$INTERACTIVE_DKG" == "true" ]]; then
+    if [[ "$SHARES_EXIST" != "true" ]]; then
+        echo ""
+        print_phase "1.5/3" "Interactive DKG Ceremony"
+        
+        # Start DKG nodes
+        run_with_spinner "Starting DKG nodes..." docker compose -f compose/devnet.yaml --profile interactive-dkg up -d \
+            dkg-node0 dkg-node1 dkg-node2 dkg-node3
+        
+        # Wait for DKG completion
+        start_time=$(date +%s)
+        timeout=300  # 5 minutes for DKG
+        
+        while true; do
+            # Check if all DKG containers have exited successfully
+            EXITED=$(docker compose -f compose/devnet.yaml ps --format json 2>/dev/null | \
+                jq -r 'select(.Service | startswith("dkg-")) | select(.State == "exited") | select(.ExitCode == 0) | .Service' 2>/dev/null | wc -l | tr -d ' ')
+            
+            FAILED=$(docker compose -f compose/devnet.yaml ps --format json 2>/dev/null | \
+                jq -r 'select(.Service | startswith("dkg-")) | select(.State == "exited") | select(.ExitCode != 0) | .Service' 2>/dev/null | wc -l | tr -d ' ')
+            
+            elapsed=$(($(date +%s) - start_time))
+            
+            if [[ "$FAILED" -gt 0 ]]; then
+                clear_line
+                print_error "DKG ceremony failed"
+                echo ""
+                echo -e "${RED}DKG node logs:${NC}"
+                docker compose -f compose/devnet.yaml logs dkg-node0 dkg-node1 dkg-node2 dkg-node3 --tail=50
+                exit 1
+            fi
+            
+            if [[ "$EXITED" -ge 4 ]]; then
+                clear_line
+                print_success "Interactive DKG ceremony completed"
+                break
+            fi
+            
+            if [[ "$elapsed" -ge "$timeout" ]]; then
+                clear_line
+                print_error "Timeout waiting for DKG ceremony"
+                exit 1
+            fi
+            
+            spinner "Running DKG ceremony... (${elapsed}s)"
+            sleep 0.15
+        done
+        
+        # Stop DKG containers (they should already be stopped)
+        docker compose -f compose/devnet.yaml --profile interactive-dkg stop dkg-node0 dkg-node1 dkg-node2 dkg-node3 2>/dev/null || true
+    else
+        print_skip "DKG shares exist"
+    fi
 else
-    print_skip "Threshold shares exist"
+    if [[ "$SHARES_EXIST" != "true" ]]; then
+        print_success "Threshold shares generated (trusted dealer)"
+    else
+        print_skip "Threshold shares exist"
+    fi
 fi
 
 echo ""

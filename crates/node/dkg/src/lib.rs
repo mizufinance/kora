@@ -4,6 +4,9 @@
 // DKG implementation is work-in-progress
 #![allow(dead_code, missing_docs, missing_debug_implementations, unreachable_pub)]
 
+#[cfg(test)]
+mod tests;
+
 mod ceremony;
 pub use ceremony::DkgCeremony;
 
@@ -13,9 +16,11 @@ pub use config::DkgConfig;
 mod error;
 pub use error::DkgError;
 
-mod message;
+mod network;
+pub use network::DkgNetwork;
 
 mod output;
 pub use output::DkgOutput;
 
-mod state;
+mod protocol;
+pub use protocol::{DkgParticipant, ProtocolMessage};
