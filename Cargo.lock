@@ -3594,6 +3594,7 @@ dependencies = [
  "commonware-cryptography",
  "commonware-runtime",
  "commonware-utils",
+ "k256",
  "kora-consensus",
  "kora-domain",
  "kora-executor",
