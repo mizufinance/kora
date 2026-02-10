@@ -323,6 +323,7 @@ impl NodeRunner for ProductionRunner {
         engine.start(transport.simplex.votes, transport.simplex.certs, transport.simplex.resolver);
 
         // Start RPC server with IndexedStateProvider if configured.
+        // FinalizedReporter writes indexed blocks; IndexedStateProvider reads them for RPC.
         if let Some((node_state, addr)) = &self.rpc_config {
             let qmdb_state = ledger.qmdb_state().await;
             let provider = IndexedStateProvider::new(block_index, qmdb_state);
@@ -332,8 +333,7 @@ impl NodeRunner for ProductionRunner {
                 self.chain_id,
                 provider,
             );
-            drop(rpc.start());
-            info!(addr = %addr, "RPC server started with indexed state provider");
+            let _rpc_handle = rpc.start();
         }
 
         info!("Validator started successfully");

@@ -205,23 +205,25 @@ async fn handle_finalized_update<E, P>(
 
             // Index the finalized block if a block index is present.
             if let Some(ref index) = block_index {
-                let (receipts, gas_used) = match cached_receipts {
-                    Some(cached) => cached,
+                let receipts_result = match cached_receipts {
+                    Some(cached) => Some(cached),
                     None => {
-                        // Cached-snapshot path: re-execute to get receipts for indexing.
-                        match re_execute_for_receipts(&state, &executor, &provider, &block).await {
-                            Some(result) => result,
-                            None => {
-                                warn!(
-                                    height = block.height,
-                                    "failed to obtain receipts for indexing"
-                                );
-                                (Vec::new(), 0)
-                            }
-                        }
+                        // Snapshot was already cached (from propose/verify), so no receipts
+                        // were captured during finalization. Re-execute to obtain them.
+                        re_execute_for_receipts(&state, &executor, &provider, &block).await
                     }
                 };
-                index_finalized_block(index, &block, &provider, &receipts, gas_used);
+                match receipts_result {
+                    Some((receipts, gas_used)) => {
+                        index_finalized_block(index, &block, &provider, &receipts, gas_used);
+                    }
+                    None => {
+                        warn!(
+                            height = block.height,
+                            "skipping block indexing: could not obtain receipts"
+                        );
+                    }
+                }
             }
 
             state.prune_mempool(&block.txs).await;
@@ -244,10 +246,28 @@ where
     P: BlockContextProvider,
 {
     let parent_digest = block.parent();
-    let parent_snapshot = state.parent_snapshot(parent_digest).await?;
+    let Some(parent_snapshot) = state.parent_snapshot(parent_digest).await else {
+        warn!(
+            height = block.height,
+            ?parent_digest,
+            "missing parent snapshot for receipt re-execution"
+        );
+        return None;
+    };
     let block_context = provider.context(block);
     let execution =
-        BlockExecution::execute(&parent_snapshot, executor, &block_context, &block.txs).await.ok()?;
+        match BlockExecution::execute(&parent_snapshot, executor, &block_context, &block.txs).await
+        {
+            Ok(exec) => exec,
+            Err(err) => {
+                warn!(
+                    height = block.height,
+                    error = ?err,
+                    "failed to re-execute finalized block for receipts"
+                );
+                return None;
+            }
+        };
     Some((execution.outcome.receipts, execution.outcome.gas_used))
 }
 
@@ -306,6 +326,10 @@ fn index_finalized_block<P: BlockContextProvider>(
                     topics: log.data.topics().to_vec(),
                     data: log.data.data.clone(),
                     log_index: li as u64,
+                    block_hash,
+                    block_number: block.height,
+                    transaction_hash: tx_hash,
+                    transaction_index: i as u64,
                 })
                 .collect();
 
@@ -506,11 +530,26 @@ mod tests {
     }
 
     fn signed_transfer(from_key: &SigningKey, to: Address, value: u64, nonce: u64) -> Tx {
-        Evm::sign_eip1559_transfer(from_key, CHAIN_ID, to, U256::from(value), nonce, GAS_LIMIT_TRANSFER)
+        Evm::sign_eip1559_transfer(
+            from_key,
+            CHAIN_ID,
+            to,
+            U256::from(value),
+            nonce,
+            GAS_LIMIT_TRANSFER,
+        )
     }
 
     fn mock_receipt(tx_hash: B256, gas_used: u64, cumulative_gas_used: u64) -> ExecutionReceipt {
         ExecutionReceipt::new(tx_hash, true, gas_used, cumulative_gas_used, vec![], None)
+    }
+
+    fn mock_failed_receipt(
+        tx_hash: B256,
+        gas_used: u64,
+        cumulative_gas_used: u64,
+    ) -> ExecutionReceipt {
+        ExecutionReceipt::new(tx_hash, false, gas_used, cumulative_gas_used, vec![], None)
     }
 
     fn mock_receipt_with_log(
@@ -638,7 +677,8 @@ mod tests {
         let tx_hash = alloy_primitives::keccak256(&tx.bytes);
         let block = test_block(7, vec![tx]);
 
-        let receipt = mock_receipt_with_log(tx_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER, log_emitter);
+        let receipt =
+            mock_receipt_with_log(tx_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER, log_emitter);
         index_finalized_block(&index, &block, &TestContextProvider, &[receipt], GAS_LIMIT_TRANSFER);
 
         let indexed_receipt = index.get_receipt(&tx_hash).expect("receipt");
@@ -721,6 +761,70 @@ mod tests {
         assert_eq!(indexed.parent_hash, parent_hash);
         assert_eq!(indexed.state_root, state_root);
         assert_eq!(indexed.base_fee_per_gas, Some(0));
+    }
+
+    #[test]
+    fn index_block_with_failed_receipt() {
+        let index = Arc::new(BlockIndex::new());
+        let from_key = test_key(5);
+        let to = Address::repeat_byte(0xaa);
+        let tx = signed_transfer(&from_key, to, 500, 0);
+        let tx_hash = alloy_primitives::keccak256(&tx.bytes);
+        let block = test_block(8, vec![tx]);
+
+        let receipt = mock_failed_receipt(tx_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER);
+        index_finalized_block(&index, &block, &TestContextProvider, &[receipt], GAS_LIMIT_TRANSFER);
+
+        let indexed_receipt = index.get_receipt(&tx_hash).expect("receipt");
+        assert!(!indexed_receipt.status, "reverted tx should have status=false");
+        assert_eq!(indexed_receipt.gas_used, GAS_LIMIT_TRANSFER);
+        assert_eq!(indexed_receipt.transaction_hash, tx_hash);
+    }
+
+    #[test]
+    fn index_block_mixed_valid_and_invalid_txs() {
+        let index = Arc::new(BlockIndex::new());
+        let key_a = test_key(6);
+        let addr_a = Evm::address_from_key(&key_a);
+        let to = Address::repeat_byte(0xbb);
+
+        // First tx is garbage (invalid), second is a valid signed transfer.
+        let invalid_tx = Tx::new(alloy_primitives::Bytes::from_static(&[0xba, 0xad]));
+        let valid_tx = signed_transfer(&key_a, to, 42, 0);
+        let invalid_hash = alloy_primitives::keccak256(&invalid_tx.bytes);
+        let valid_hash = alloy_primitives::keccak256(&valid_tx.bytes);
+
+        let block = test_block(11, vec![invalid_tx, valid_tx]);
+
+        // Only one receipt exists — for the valid tx at index 1.
+        // Note: receipts are aligned by tx index, so receipts[0] corresponds to
+        // the invalid tx (which has no receipt) and receipts[1] to the valid tx.
+        // We pass two receipts to maintain index alignment.
+        let receipts = vec![
+            mock_receipt(invalid_hash, 0, 0),
+            mock_receipt(valid_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER),
+        ];
+        index_finalized_block(&index, &block, &TestContextProvider, &receipts, GAS_LIMIT_TRANSFER);
+
+        // Block should have both tx hashes recorded.
+        let indexed_block = index.get_block_by_number(11).expect("block");
+        assert_eq!(indexed_block.transaction_hashes.len(), 2);
+        assert_eq!(indexed_block.transaction_hashes[0], invalid_hash);
+        assert_eq!(indexed_block.transaction_hashes[1], valid_hash);
+
+        // Invalid tx should NOT have an IndexedTransaction (decode failed).
+        assert!(index.get_transaction(&invalid_hash).is_none());
+
+        // Valid tx should have an IndexedTransaction with correct index.
+        let indexed_tx = index.get_transaction(&valid_hash).expect("valid tx");
+        assert_eq!(indexed_tx.from, addr_a);
+        assert_eq!(indexed_tx.index, 1);
+        assert_eq!(indexed_tx.value, U256::from(42));
+
+        // Valid tx should have a receipt (receipts.get(1) returns the second receipt).
+        let indexed_receipt = index.get_receipt(&valid_hash).expect("valid tx receipt");
+        assert!(indexed_receipt.status);
+        assert_eq!(indexed_receipt.gas_used, GAS_LIMIT_TRANSFER);
     }
 
     #[test]

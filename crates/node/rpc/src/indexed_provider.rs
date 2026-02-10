@@ -130,17 +130,16 @@ impl<S: StateDbRead + Send + Sync + 'static> StateProvider for IndexedStateProvi
         }
 
         let indexed_logs = self.index.get_logs(&log_filter);
-        let block_number = self.index.head_block_number();
         let logs = indexed_logs
             .into_iter()
             .map(|log| RpcLog {
                 address: log.address,
                 topics: log.topics,
                 data: log.data,
-                block_number: U64::from(block_number),
-                transaction_hash: B256::ZERO,
-                transaction_index: U64::ZERO,
-                block_hash: B256::ZERO,
+                block_number: U64::from(log.block_number),
+                transaction_hash: log.transaction_hash,
+                transaction_index: U64::from(log.transaction_index),
+                block_hash: log.block_hash,
                 log_index: U64::from(log.log_index),
                 removed: false,
             })
@@ -338,6 +337,10 @@ mod tests {
                 topics: vec![],
                 data: Bytes::new(),
                 log_index: 0,
+                block_hash,
+                block_number,
+                transaction_hash: tx_hash,
+                transaction_index: 0,
             }],
             status: true,
         }
