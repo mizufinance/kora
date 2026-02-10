@@ -25,7 +25,7 @@ use kora_rpc::IndexedStateProvider;
 use kora_service::{NodeRunContext, NodeRunner};
 use kora_simplex::{DEFAULT_MAILBOX_SIZE as MAILBOX_SIZE, DefaultPool};
 use kora_transport::NetworkTransport;
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 
 use crate::{RevmApplication, RunnerError, scheme::ThresholdScheme};
 
@@ -333,7 +333,11 @@ impl NodeRunner for ProductionRunner {
                 self.chain_id,
                 provider,
             );
-            let _rpc_handle = rpc.start();
+            let rpc_handle = rpc.start();
+            context.clone().shared(true).spawn(move |_| async move {
+                rpc_handle.stopped().await;
+                error!("RPC server stopped unexpectedly");
+            });
         }
 
         info!("Validator started successfully");

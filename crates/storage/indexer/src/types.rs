@@ -35,7 +35,7 @@ pub struct IndexedTransaction {
     /// Number of the block containing this transaction.
     pub block_number: u64,
     /// Index of the transaction within the block.
-    pub index: u64,
+    pub transaction_index: u64,
     /// Sender address.
     pub from: Address,
     /// Recipient address (None for contract creation).

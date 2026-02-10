@@ -243,7 +243,7 @@ mod tests {
             hash,
             block_hash,
             block_number,
-            index: 0,
+            transaction_index: 0,
             from: Address::ZERO,
             to: Some(Address::ZERO),
             value: U256::ZERO,

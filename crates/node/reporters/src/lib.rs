@@ -285,17 +285,18 @@ fn index_finalized_block<P: BlockContextProvider>(
     let mut tx_hashes = Vec::with_capacity(block.txs.len());
     let mut indexed_txs = Vec::with_capacity(block.txs.len());
     let mut indexed_receipts = Vec::with_capacity(receipts.len());
+    let mut block_log_index: u64 = 0;
 
     for (i, tx) in block.txs.iter().enumerate() {
         let tx_hash = keccak256(&tx.bytes);
 
         let Ok(envelope) = TxEnvelope::decode_2718(&mut tx.bytes.as_ref()) else {
-            warn!(height = block.height, index = i, "failed to decode tx for indexing");
+            error!(height = block.height, index = i, %tx_hash, "failed to decode tx for indexing");
             tx_hashes.push(tx_hash);
             continue;
         };
         let Ok(sender) = envelope.recover_signer() else {
-            warn!(height = block.height, index = i, "failed to recover sender for indexing");
+            error!(height = block.height, index = i, %tx_hash, "failed to recover sender for indexing");
             tx_hashes.push(tx_hash);
             continue;
         };
@@ -306,7 +307,7 @@ fn index_finalized_block<P: BlockContextProvider>(
             hash: tx_hash,
             block_hash,
             block_number: block.height,
-            index: i as u64,
+            transaction_index: i as u64,
             from: sender,
             to: envelope.to(),
             value: envelope.value(),
@@ -320,16 +321,19 @@ fn index_finalized_block<P: BlockContextProvider>(
             let logs = receipt
                 .logs()
                 .iter()
-                .enumerate()
-                .map(|(li, log)| IndexedLog {
-                    address: log.address,
-                    topics: log.data.topics().to_vec(),
-                    data: log.data.data.clone(),
-                    log_index: li as u64,
-                    block_hash,
-                    block_number: block.height,
-                    transaction_hash: tx_hash,
-                    transaction_index: i as u64,
+                .map(|log| {
+                    let idx = block_log_index;
+                    block_log_index += 1;
+                    IndexedLog {
+                        address: log.address,
+                        topics: log.data.topics().to_vec(),
+                        data: log.data.data.clone(),
+                        log_index: idx,
+                        block_hash,
+                        block_number: block.height,
+                        transaction_hash: tx_hash,
+                        transaction_index: i as u64,
+                    }
                 })
                 .collect();
 
@@ -346,6 +350,13 @@ fn index_finalized_block<P: BlockContextProvider>(
                 logs,
                 status: receipt.success(),
             });
+        } else {
+            warn!(
+                height = block.height,
+                tx_index = i,
+                %tx_hash,
+                "missing receipt for transaction"
+            );
         }
     }
 
@@ -354,7 +365,7 @@ fn index_finalized_block<P: BlockContextProvider>(
         number: block.height,
         parent_hash: block.parent.0,
         state_root: block.state_root.0,
-        timestamp: block.height,
+        timestamp: block_context.header.timestamp,
         gas_limit: block_context.header.gas_limit,
         gas_used,
         base_fee_per_gas: block_context.header.base_fee_per_gas,
@@ -568,6 +579,25 @@ mod tests {
         ExecutionReceipt::new(tx_hash, true, gas_used, cumulative_gas_used, vec![log], None)
     }
 
+    fn mock_receipt_with_logs(
+        tx_hash: B256,
+        gas_used: u64,
+        cumulative_gas_used: u64,
+        log_addresses: &[Address],
+    ) -> ExecutionReceipt {
+        let logs = log_addresses
+            .iter()
+            .map(|&addr| Log {
+                address: addr,
+                data: LogData::new_unchecked(
+                    vec![B256::repeat_byte(0x01)],
+                    alloy_primitives::Bytes::from_static(&[0xca, 0xfe]),
+                ),
+            })
+            .collect();
+        ExecutionReceipt::new(tx_hash, true, gas_used, cumulative_gas_used, logs, None)
+    }
+
     #[test]
     fn index_empty_block() {
         let index = Arc::new(BlockIndex::new());
@@ -613,7 +643,7 @@ mod tests {
         assert_eq!(indexed_tx.nonce, 0);
         assert_eq!(indexed_tx.gas_limit, GAS_LIMIT_TRANSFER);
         assert_eq!(indexed_tx.block_number, 5);
-        assert_eq!(indexed_tx.index, 0);
+        assert_eq!(indexed_tx.transaction_index, 0);
 
         // Verify receipt
         let indexed_receipt = index.get_receipt(&tx_hash).expect("receipt");
@@ -654,12 +684,12 @@ mod tests {
         // Verify both transactions are indexed with correct indices
         let itx_a = index.get_transaction(&hash_a).expect("tx_a");
         assert_eq!(itx_a.from, addr_a);
-        assert_eq!(itx_a.index, 0);
+        assert_eq!(itx_a.transaction_index, 0);
         assert_eq!(itx_a.value, U256::from(50));
 
         let itx_b = index.get_transaction(&hash_b).expect("tx_b");
         assert_eq!(itx_b.from, addr_b);
-        assert_eq!(itx_b.index, 1);
+        assert_eq!(itx_b.transaction_index, 1);
         assert_eq!(itx_b.value, U256::from(75));
 
         // Verify receipt cumulative gas
@@ -687,6 +717,57 @@ mod tests {
         assert_eq!(indexed_receipt.logs[0].topics.len(), 1);
         assert_eq!(indexed_receipt.logs[0].topics[0], B256::repeat_byte(0x01));
         assert_eq!(indexed_receipt.logs[0].data.as_ref(), &[0xca, 0xfe]);
+        assert_eq!(indexed_receipt.logs[0].log_index, 0);
+    }
+
+    #[test]
+    fn index_block_log_indices_span_transactions() {
+        let index = Arc::new(BlockIndex::new());
+        let key_a = test_key(1);
+        let key_b = test_key(2);
+        let to = Address::repeat_byte(0xdd);
+        let log_emitter_a = Address::repeat_byte(0xaa);
+        let log_emitter_b = Address::repeat_byte(0xbb);
+
+        let tx_a = signed_transfer(&key_a, to, 10, 0);
+        let tx_b = signed_transfer(&key_b, to, 20, 0);
+        let hash_a = alloy_primitives::keccak256(&tx_a.bytes);
+        let hash_b = alloy_primitives::keccak256(&tx_b.bytes);
+
+        let block = test_block(15, vec![tx_a, tx_b]);
+
+        // tx_a has 2 logs, tx_b has 1 log
+        let receipt_a = mock_receipt_with_logs(
+            hash_a,
+            GAS_LIMIT_TRANSFER,
+            GAS_LIMIT_TRANSFER,
+            &[log_emitter_a, log_emitter_a],
+        );
+        let receipt_b = mock_receipt_with_logs(
+            hash_b,
+            GAS_LIMIT_TRANSFER,
+            GAS_LIMIT_TRANSFER * 2,
+            &[log_emitter_b],
+        );
+        let total_gas = GAS_LIMIT_TRANSFER * 2;
+        index_finalized_block(
+            &index,
+            &block,
+            &TestContextProvider,
+            &[receipt_a, receipt_b],
+            total_gas,
+        );
+
+        // tx_a logs should have block-level indices 0 and 1
+        let receipt_a = index.get_receipt(&hash_a).expect("receipt_a");
+        assert_eq!(receipt_a.logs.len(), 2);
+        assert_eq!(receipt_a.logs[0].log_index, 0);
+        assert_eq!(receipt_a.logs[1].log_index, 1);
+
+        // tx_b log should have block-level index 2 (continuing from tx_a)
+        let receipt_b = index.get_receipt(&hash_b).expect("receipt_b");
+        assert_eq!(receipt_b.logs.len(), 1);
+        assert_eq!(receipt_b.logs[0].log_index, 2);
     }
 
     #[test]
@@ -818,7 +899,7 @@ mod tests {
         // Valid tx should have an IndexedTransaction with correct index.
         let indexed_tx = index.get_transaction(&valid_hash).expect("valid tx");
         assert_eq!(indexed_tx.from, addr_a);
-        assert_eq!(indexed_tx.index, 1);
+        assert_eq!(indexed_tx.transaction_index, 1);
         assert_eq!(indexed_tx.value, U256::from(42));
 
         // Valid tx should have a receipt (receipts.get(1) returns the second receipt).
