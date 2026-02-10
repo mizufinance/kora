@@ -28,7 +28,16 @@ commonware-runtime.workspace = true
 commonware-utils.workspace = true
 
 # Alloy
+alloy-consensus = { workspace = true }
+alloy-eips.workspace = true
 alloy-primitives.workspace = true
+
+# Local crates (indexer)
+kora-indexer.workspace = true
 
 # Tracing
 tracing.workspace = true
+
+[dev-dependencies]
+k256.workspace = true
+kora-domain = { path = "../domain", features = ["evm"] }

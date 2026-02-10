@@ -270,6 +270,12 @@ impl LedgerView {
         let tx_ids: Vec<TxId> = txs.iter().map(Tx::id).collect();
         inner.mempool.prune(&tx_ids);
     }
+
+    /// Return a clone of the underlying QMDB state handle.
+    pub async fn qmdb_state(&self) -> QmdbState {
+        let inner = self.inner.lock().await;
+        inner.qmdb.state()
+    }
 }
 
 /// Domain service that exposes high-level ledger commands.
@@ -403,6 +409,11 @@ impl LedgerService {
     /// Remove transactions from the mempool.
     pub async fn prune_mempool(&self, txs: &[Tx]) {
         self.view.prune_mempool(txs).await;
+    }
+
+    /// Return a clone of the underlying QMDB state handle.
+    pub async fn qmdb_state(&self) -> QmdbState {
+        self.view.qmdb_state().await
     }
 }
 

@@ -243,7 +243,7 @@ mod tests {
             hash,
             block_hash,
             block_number,
-            index: 0,
+            transaction_index: 0,
             from: Address::ZERO,
             to: Some(Address::ZERO),
             value: U256::ZERO,
@@ -331,6 +331,10 @@ mod tests {
             topics: vec![topic],
             data: Bytes::new(),
             log_index: 0,
+            block_hash,
+            block_number: 1,
+            transaction_hash: B256::repeat_byte(2),
+            transaction_index: 0,
         };
 
         let receipt = IndexedReceipt {

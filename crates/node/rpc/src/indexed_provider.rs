@@ -130,17 +130,16 @@ impl<S: StateDbRead + Send + Sync + 'static> StateProvider for IndexedStateProvi
         }
 
         let indexed_logs = self.index.get_logs(&log_filter);
-        let block_number = self.index.head_block_number();
         let logs = indexed_logs
             .into_iter()
             .map(|log| RpcLog {
                 address: log.address,
                 topics: log.topics,
                 data: log.data,
-                block_number: U64::from(block_number),
-                transaction_hash: B256::ZERO,
-                transaction_index: U64::ZERO,
-                block_hash: B256::ZERO,
+                block_number: U64::from(log.block_number),
+                transaction_hash: log.transaction_hash,
+                transaction_index: U64::from(log.transaction_index),
+                block_hash: log.block_hash,
                 log_index: U64::from(log.log_index),
                 removed: false,
             })
@@ -209,7 +208,7 @@ fn indexed_tx_to_rpc(tx: IndexedTransaction) -> RpcTransaction {
         nonce: U64::from(tx.nonce),
         block_hash: Some(tx.block_hash),
         block_number: Some(U64::from(tx.block_number)),
-        transaction_index: Some(U64::from(tx.index)),
+        transaction_index: Some(U64::from(tx.transaction_index)),
         from: tx.from,
         to: tx.to,
         value: tx.value,
@@ -311,7 +310,7 @@ mod tests {
             hash,
             block_hash,
             block_number,
-            index: 0,
+            transaction_index: 0,
             from: Address::ZERO,
             to: Some(Address::ZERO),
             value: U256::ZERO,
@@ -338,6 +337,10 @@ mod tests {
                 topics: vec![],
                 data: Bytes::new(),
                 log_index: 0,
+                block_hash,
+                block_number,
+                transaction_hash: tx_hash,
+                transaction_index: 0,
             }],
             status: true,
         }

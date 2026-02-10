@@ -35,7 +35,7 @@ pub struct IndexedTransaction {
     /// Number of the block containing this transaction.
     pub block_number: u64,
     /// Index of the transaction within the block.
-    pub index: u64,
+    pub transaction_index: u64,
     /// Sender address.
     pub from: Address,
     /// Recipient address (None for contract creation).
@@ -90,6 +90,14 @@ pub struct IndexedLog {
     pub data: Bytes,
     /// Log index within the block.
     pub log_index: u64,
+    /// Hash of the block containing this log.
+    pub block_hash: B256,
+    /// Number of the block containing this log.
+    pub block_number: u64,
+    /// Hash of the transaction that emitted this log.
+    pub transaction_hash: B256,
+    /// Index of the transaction within the block.
+    pub transaction_index: u64,
 }
 
 /// Statistics about the block index.

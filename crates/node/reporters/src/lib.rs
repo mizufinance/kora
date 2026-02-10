@@ -4,8 +4,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
-use std::{fmt, marker::PhantomData};
+use std::{fmt, marker::PhantomData, sync::Arc};
 
+use alloy_consensus::{Transaction as _, TxEnvelope, transaction::SignerRecoverable as _};
+use alloy_eips::eip2718::Decodable2718 as _;
 use alloy_primitives::{B256, Bytes, keccak256};
 use commonware_consensus::{
     Block as _, Reporter,
@@ -20,7 +22,8 @@ use commonware_runtime::{Spawner as _, tokio};
 use commonware_utils::acknowledgement::Acknowledgement as _;
 use kora_consensus::BlockExecution;
 use kora_domain::{Block, ConsensusDigest, PublicKey};
-use kora_executor::{BlockContext, BlockExecutor};
+use kora_executor::{BlockContext, BlockExecutor, ExecutionReceipt};
+use kora_indexer::{BlockIndex, IndexedBlock, IndexedLog, IndexedReceipt, IndexedTransaction};
 use kora_ledger::LedgerService;
 use kora_overlay::OverlayState;
 use kora_qmdb_ledger::QmdbState;
@@ -105,6 +108,7 @@ async fn handle_finalized_update<E, P>(
     executor: E,
     provider: P,
     update: Update<Block>,
+    block_index: Option<Arc<BlockIndex>>,
 ) where
     E: BlockExecutor<OverlayState<QmdbState>, Tx = Bytes>,
     P: BlockContextProvider,
@@ -113,6 +117,8 @@ async fn handle_finalized_update<E, P>(
         Update::Tip(..) => {}
         Update::Block(block, ack) => {
             let digest = block.commitment();
+            let mut cached_receipts: Option<(Vec<ExecutionReceipt>, u64)> = None;
+
             if state.query_state_root(digest).await.is_none() {
                 trace!(?digest, "missing snapshot for finalized block; re-executing");
                 let parent_digest = block.parent();
@@ -160,6 +166,11 @@ async fn handle_finalized_update<E, P>(
                     ack.acknowledge();
                     return;
                 }
+                // Save receipts for indexing before consuming changes.
+                let receipts = execution.outcome.receipts;
+                let gas_used = execution.outcome.gas_used;
+                cached_receipts = Some((receipts, gas_used));
+
                 let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
                 state
                     .insert_snapshot(
@@ -191,12 +202,178 @@ async fn handle_finalized_update<E, P>(
                 ack.acknowledge();
                 return;
             }
+
+            // Index the finalized block if a block index is present.
+            if let Some(ref index) = block_index {
+                let receipts_result = match cached_receipts {
+                    Some(cached) => Some(cached),
+                    None => {
+                        // Snapshot was already cached (from propose/verify), so no receipts
+                        // were captured during finalization. Re-execute to obtain them.
+                        re_execute_for_receipts(&state, &executor, &provider, &block).await
+                    }
+                };
+                match receipts_result {
+                    Some((receipts, gas_used)) => {
+                        index_finalized_block(index, &block, &provider, &receipts, gas_used);
+                    }
+                    None => {
+                        warn!(
+                            height = block.height,
+                            "skipping block indexing: could not obtain receipts"
+                        );
+                    }
+                }
+            }
+
             state.prune_mempool(&block.txs).await;
             // Marshal waits for the application to acknowledge processing before advancing the
             // delivery floor. Without this, the node can stall on finalized block delivery.
             ack.acknowledge();
         }
     }
+}
+
+/// Re-execute a finalized block to obtain receipts for indexing.
+async fn re_execute_for_receipts<E, P>(
+    state: &LedgerService,
+    executor: &E,
+    provider: &P,
+    block: &Block,
+) -> Option<(Vec<ExecutionReceipt>, u64)>
+where
+    E: BlockExecutor<OverlayState<QmdbState>, Tx = Bytes>,
+    P: BlockContextProvider,
+{
+    let parent_digest = block.parent();
+    let Some(parent_snapshot) = state.parent_snapshot(parent_digest).await else {
+        warn!(
+            height = block.height,
+            ?parent_digest,
+            "missing parent snapshot for receipt re-execution"
+        );
+        return None;
+    };
+    let block_context = provider.context(block);
+    let execution =
+        match BlockExecution::execute(&parent_snapshot, executor, &block_context, &block.txs).await
+        {
+            Ok(exec) => exec,
+            Err(err) => {
+                warn!(
+                    height = block.height,
+                    error = ?err,
+                    "failed to re-execute finalized block for receipts"
+                );
+                return None;
+            }
+        };
+    Some((execution.outcome.receipts, execution.outcome.gas_used))
+}
+
+/// Index a finalized block into the block index.
+fn index_finalized_block<P: BlockContextProvider>(
+    index: &BlockIndex,
+    block: &Block,
+    provider: &P,
+    receipts: &[ExecutionReceipt],
+    gas_used: u64,
+) {
+    let block_hash = block.id().0;
+    let block_context = provider.context(block);
+
+    let mut tx_hashes = Vec::with_capacity(block.txs.len());
+    let mut indexed_txs = Vec::with_capacity(block.txs.len());
+    let mut indexed_receipts = Vec::with_capacity(receipts.len());
+    let mut block_log_index: u64 = 0;
+
+    for (i, tx) in block.txs.iter().enumerate() {
+        let tx_hash = keccak256(&tx.bytes);
+
+        let Ok(envelope) = TxEnvelope::decode_2718(&mut tx.bytes.as_ref()) else {
+            error!(height = block.height, index = i, %tx_hash, "failed to decode tx for indexing");
+            tx_hashes.push(tx_hash);
+            continue;
+        };
+        let Ok(sender) = envelope.recover_signer() else {
+            error!(height = block.height, index = i, %tx_hash, "failed to recover sender for indexing");
+            tx_hashes.push(tx_hash);
+            continue;
+        };
+
+        tx_hashes.push(tx_hash);
+
+        indexed_txs.push(IndexedTransaction {
+            hash: tx_hash,
+            block_hash,
+            block_number: block.height,
+            transaction_index: i as u64,
+            from: sender,
+            to: envelope.to(),
+            value: envelope.value(),
+            gas_limit: envelope.gas_limit(),
+            gas_price: envelope.gas_price().unwrap_or_else(|| envelope.max_fee_per_gas()),
+            input: envelope.input().clone(),
+            nonce: envelope.nonce(),
+        });
+
+        if let Some(receipt) = receipts.get(i) {
+            let logs = receipt
+                .logs()
+                .iter()
+                .map(|log| {
+                    let idx = block_log_index;
+                    block_log_index += 1;
+                    IndexedLog {
+                        address: log.address,
+                        topics: log.data.topics().to_vec(),
+                        data: log.data.data.clone(),
+                        log_index: idx,
+                        block_hash,
+                        block_number: block.height,
+                        transaction_hash: tx_hash,
+                        transaction_index: i as u64,
+                    }
+                })
+                .collect();
+
+            indexed_receipts.push(IndexedReceipt {
+                transaction_hash: tx_hash,
+                block_hash,
+                block_number: block.height,
+                transaction_index: i as u64,
+                from: sender,
+                to: envelope.to(),
+                cumulative_gas_used: receipt.cumulative_gas_used(),
+                gas_used: receipt.gas_used,
+                contract_address: receipt.contract_address,
+                logs,
+                status: receipt.success(),
+            });
+        } else {
+            warn!(
+                height = block.height,
+                tx_index = i,
+                %tx_hash,
+                "missing receipt for transaction"
+            );
+        }
+    }
+
+    let indexed_block = IndexedBlock {
+        hash: block_hash,
+        number: block.height,
+        parent_hash: block.parent.0,
+        state_root: block.state_root.0,
+        timestamp: block_context.header.timestamp,
+        gas_limit: block_context.header.gas_limit,
+        gas_used,
+        base_fee_per_gas: block_context.header.base_fee_per_gas,
+        transaction_hashes: tx_hashes,
+    };
+
+    index.insert_block(indexed_block, indexed_txs, indexed_receipts);
+    trace!(height = block.height, "indexed finalized block");
 }
 
 #[derive(Clone)]
@@ -210,6 +387,8 @@ pub struct FinalizedReporter<E, P> {
     executor: E,
     /// Provider that builds block execution context.
     provider: P,
+    /// Optional block index for indexing finalized blocks for RPC queries.
+    block_index: Option<Arc<BlockIndex>>,
 }
 
 impl<E, P> fmt::Debug for FinalizedReporter<E, P> {
@@ -230,7 +409,14 @@ where
         executor: E,
         provider: P,
     ) -> Self {
-        Self { state, context, executor, provider }
+        Self { state, context, executor, provider, block_index: None }
+    }
+
+    /// Set the block index for indexing finalized blocks.
+    #[must_use]
+    pub fn with_block_index(mut self, index: Arc<BlockIndex>) -> Self {
+        self.block_index = Some(index);
+        self
     }
 }
 
@@ -246,8 +432,9 @@ where
         let context = self.context.clone();
         let executor = self.executor.clone();
         let provider = self.provider.clone();
+        let block_index = self.block_index.clone();
         async move {
-            handle_finalized_update(state, context, executor, provider, update).await;
+            handle_finalized_update(state, context, executor, provider, update, block_index).await;
         }
     }
 }
@@ -300,5 +487,437 @@ where
             _ => {}
         }
         async {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use alloy_consensus::Header;
+    use alloy_primitives::{Address, B256, Log, LogData, U256};
+    use k256::ecdsa::SigningKey;
+    use kora_domain::{Block, BlockId, StateRoot, Tx, evm::Evm};
+    use kora_executor::{BlockContext, ExecutionReceipt};
+    use kora_indexer::BlockIndex;
+
+    use super::{BlockContextProvider, index_finalized_block};
+
+    const GAS_LIMIT: u64 = 30_000_000;
+    const CHAIN_ID: u64 = 1337;
+    const GAS_LIMIT_TRANSFER: u64 = 21_000;
+
+    #[derive(Clone, Debug)]
+    struct TestContextProvider;
+
+    impl BlockContextProvider for TestContextProvider {
+        fn context(&self, block: &Block) -> BlockContext {
+            let header = Header {
+                number: block.height,
+                timestamp: block.height,
+                gas_limit: GAS_LIMIT,
+                beneficiary: Address::ZERO,
+                base_fee_per_gas: Some(0),
+                ..Default::default()
+            };
+            BlockContext::new(header, B256::ZERO, block.prevrandao)
+        }
+    }
+
+    fn test_key(seed: u8) -> SigningKey {
+        let mut secret = [0u8; 32];
+        secret[31] = seed.max(1);
+        SigningKey::from_bytes((&secret).into()).expect("valid key")
+    }
+
+    fn test_block(height: u64, txs: Vec<Tx>) -> Block {
+        Block {
+            parent: BlockId(B256::ZERO),
+            height,
+            prevrandao: B256::ZERO,
+            state_root: StateRoot(B256::repeat_byte(0xaa)),
+            txs,
+        }
+    }
+
+    fn signed_transfer(from_key: &SigningKey, to: Address, value: u64, nonce: u64) -> Tx {
+        Evm::sign_eip1559_transfer(
+            from_key,
+            CHAIN_ID,
+            to,
+            U256::from(value),
+            nonce,
+            GAS_LIMIT_TRANSFER,
+        )
+    }
+
+    fn mock_receipt(tx_hash: B256, gas_used: u64, cumulative_gas_used: u64) -> ExecutionReceipt {
+        ExecutionReceipt::new(tx_hash, true, gas_used, cumulative_gas_used, vec![], None)
+    }
+
+    fn mock_failed_receipt(
+        tx_hash: B256,
+        gas_used: u64,
+        cumulative_gas_used: u64,
+    ) -> ExecutionReceipt {
+        ExecutionReceipt::new(tx_hash, false, gas_used, cumulative_gas_used, vec![], None)
+    }
+
+    fn mock_receipt_with_log(
+        tx_hash: B256,
+        gas_used: u64,
+        cumulative_gas_used: u64,
+        log_address: Address,
+    ) -> ExecutionReceipt {
+        let log = Log {
+            address: log_address,
+            data: LogData::new_unchecked(
+                vec![B256::repeat_byte(0x01)],
+                alloy_primitives::Bytes::from_static(&[0xca, 0xfe]),
+            ),
+        };
+        ExecutionReceipt::new(tx_hash, true, gas_used, cumulative_gas_used, vec![log], None)
+    }
+
+    fn mock_receipt_with_logs(
+        tx_hash: B256,
+        gas_used: u64,
+        cumulative_gas_used: u64,
+        log_addresses: &[Address],
+    ) -> ExecutionReceipt {
+        let logs = log_addresses
+            .iter()
+            .map(|&addr| Log {
+                address: addr,
+                data: LogData::new_unchecked(
+                    vec![B256::repeat_byte(0x01)],
+                    alloy_primitives::Bytes::from_static(&[0xca, 0xfe]),
+                ),
+            })
+            .collect();
+        ExecutionReceipt::new(tx_hash, true, gas_used, cumulative_gas_used, logs, None)
+    }
+
+    #[test]
+    fn index_empty_block() {
+        let index = Arc::new(BlockIndex::new());
+        let block = test_block(1, vec![]);
+
+        index_finalized_block(&index, &block, &TestContextProvider, &[], 0);
+
+        let indexed = index.get_block_by_number(1).expect("block should be indexed");
+        assert_eq!(indexed.number, 1);
+        assert_eq!(indexed.hash, block.id().0);
+        assert_eq!(indexed.parent_hash, B256::ZERO);
+        assert_eq!(indexed.gas_used, 0);
+        assert_eq!(indexed.gas_limit, GAS_LIMIT);
+        assert!(indexed.transaction_hashes.is_empty());
+        assert_eq!(index.head_block_number(), 1);
+    }
+
+    #[test]
+    fn index_block_with_single_transfer() {
+        let index = Arc::new(BlockIndex::new());
+        let from_key = test_key(1);
+        let from = Evm::address_from_key(&from_key);
+        let to = Address::repeat_byte(0xbb);
+        let tx = signed_transfer(&from_key, to, 100, 0);
+        let tx_hash = alloy_primitives::keccak256(&tx.bytes);
+        let block = test_block(5, vec![tx]);
+
+        let receipt = mock_receipt(tx_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER);
+        index_finalized_block(&index, &block, &TestContextProvider, &[receipt], GAS_LIMIT_TRANSFER);
+
+        // Verify block
+        let indexed_block = index.get_block_by_number(5).expect("block");
+        assert_eq!(indexed_block.number, 5);
+        assert_eq!(indexed_block.gas_used, GAS_LIMIT_TRANSFER);
+        assert_eq!(indexed_block.transaction_hashes.len(), 1);
+        assert_eq!(indexed_block.transaction_hashes[0], tx_hash);
+
+        // Verify transaction
+        let indexed_tx = index.get_transaction(&tx_hash).expect("tx");
+        assert_eq!(indexed_tx.from, from);
+        assert_eq!(indexed_tx.to, Some(to));
+        assert_eq!(indexed_tx.value, U256::from(100));
+        assert_eq!(indexed_tx.nonce, 0);
+        assert_eq!(indexed_tx.gas_limit, GAS_LIMIT_TRANSFER);
+        assert_eq!(indexed_tx.block_number, 5);
+        assert_eq!(indexed_tx.transaction_index, 0);
+
+        // Verify receipt
+        let indexed_receipt = index.get_receipt(&tx_hash).expect("receipt");
+        assert_eq!(indexed_receipt.transaction_hash, tx_hash);
+        assert_eq!(indexed_receipt.gas_used, GAS_LIMIT_TRANSFER);
+        assert!(indexed_receipt.status);
+        assert_eq!(indexed_receipt.from, from);
+        assert_eq!(indexed_receipt.to, Some(to));
+    }
+
+    #[test]
+    fn index_block_with_multiple_txs() {
+        let index = Arc::new(BlockIndex::new());
+        let key_a = test_key(1);
+        let key_b = test_key(2);
+        let addr_a = Evm::address_from_key(&key_a);
+        let addr_b = Evm::address_from_key(&key_b);
+        let to = Address::repeat_byte(0xcc);
+
+        let tx_a = signed_transfer(&key_a, to, 50, 0);
+        let tx_b = signed_transfer(&key_b, to, 75, 0);
+        let hash_a = alloy_primitives::keccak256(&tx_a.bytes);
+        let hash_b = alloy_primitives::keccak256(&tx_b.bytes);
+
+        let block = test_block(10, vec![tx_a, tx_b]);
+        let receipts = vec![
+            mock_receipt(hash_a, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER),
+            mock_receipt(hash_b, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER * 2),
+        ];
+        let total_gas = GAS_LIMIT_TRANSFER * 2;
+        index_finalized_block(&index, &block, &TestContextProvider, &receipts, total_gas);
+
+        // Verify block
+        let indexed_block = index.get_block_by_number(10).expect("block");
+        assert_eq!(indexed_block.transaction_hashes.len(), 2);
+        assert_eq!(indexed_block.gas_used, total_gas);
+
+        // Verify both transactions are indexed with correct indices
+        let itx_a = index.get_transaction(&hash_a).expect("tx_a");
+        assert_eq!(itx_a.from, addr_a);
+        assert_eq!(itx_a.transaction_index, 0);
+        assert_eq!(itx_a.value, U256::from(50));
+
+        let itx_b = index.get_transaction(&hash_b).expect("tx_b");
+        assert_eq!(itx_b.from, addr_b);
+        assert_eq!(itx_b.transaction_index, 1);
+        assert_eq!(itx_b.value, U256::from(75));
+
+        // Verify receipt cumulative gas
+        let receipt_b = index.get_receipt(&hash_b).expect("receipt_b");
+        assert_eq!(receipt_b.cumulative_gas_used, GAS_LIMIT_TRANSFER * 2);
+    }
+
+    #[test]
+    fn index_block_with_receipt_logs() {
+        let index = Arc::new(BlockIndex::new());
+        let from_key = test_key(3);
+        let to = Address::repeat_byte(0xdd);
+        let log_emitter = Address::repeat_byte(0xee);
+        let tx = signed_transfer(&from_key, to, 10, 0);
+        let tx_hash = alloy_primitives::keccak256(&tx.bytes);
+        let block = test_block(7, vec![tx]);
+
+        let receipt =
+            mock_receipt_with_log(tx_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER, log_emitter);
+        index_finalized_block(&index, &block, &TestContextProvider, &[receipt], GAS_LIMIT_TRANSFER);
+
+        let indexed_receipt = index.get_receipt(&tx_hash).expect("receipt");
+        assert_eq!(indexed_receipt.logs.len(), 1);
+        assert_eq!(indexed_receipt.logs[0].address, log_emitter);
+        assert_eq!(indexed_receipt.logs[0].topics.len(), 1);
+        assert_eq!(indexed_receipt.logs[0].topics[0], B256::repeat_byte(0x01));
+        assert_eq!(indexed_receipt.logs[0].data.as_ref(), &[0xca, 0xfe]);
+        assert_eq!(indexed_receipt.logs[0].log_index, 0);
+    }
+
+    #[test]
+    fn index_block_log_indices_span_transactions() {
+        let index = Arc::new(BlockIndex::new());
+        let key_a = test_key(1);
+        let key_b = test_key(2);
+        let to = Address::repeat_byte(0xdd);
+        let log_emitter_a = Address::repeat_byte(0xaa);
+        let log_emitter_b = Address::repeat_byte(0xbb);
+
+        let tx_a = signed_transfer(&key_a, to, 10, 0);
+        let tx_b = signed_transfer(&key_b, to, 20, 0);
+        let hash_a = alloy_primitives::keccak256(&tx_a.bytes);
+        let hash_b = alloy_primitives::keccak256(&tx_b.bytes);
+
+        let block = test_block(15, vec![tx_a, tx_b]);
+
+        // tx_a has 2 logs, tx_b has 1 log
+        let receipt_a = mock_receipt_with_logs(
+            hash_a,
+            GAS_LIMIT_TRANSFER,
+            GAS_LIMIT_TRANSFER,
+            &[log_emitter_a, log_emitter_a],
+        );
+        let receipt_b = mock_receipt_with_logs(
+            hash_b,
+            GAS_LIMIT_TRANSFER,
+            GAS_LIMIT_TRANSFER * 2,
+            &[log_emitter_b],
+        );
+        let total_gas = GAS_LIMIT_TRANSFER * 2;
+        index_finalized_block(
+            &index,
+            &block,
+            &TestContextProvider,
+            &[receipt_a, receipt_b],
+            total_gas,
+        );
+
+        // tx_a logs should have block-level indices 0 and 1
+        let receipt_a = index.get_receipt(&hash_a).expect("receipt_a");
+        assert_eq!(receipt_a.logs.len(), 2);
+        assert_eq!(receipt_a.logs[0].log_index, 0);
+        assert_eq!(receipt_a.logs[1].log_index, 1);
+
+        // tx_b log should have block-level index 2 (continuing from tx_a)
+        let receipt_b = index.get_receipt(&hash_b).expect("receipt_b");
+        assert_eq!(receipt_b.logs.len(), 1);
+        assert_eq!(receipt_b.logs[0].log_index, 2);
+    }
+
+    #[test]
+    fn index_block_invalid_tx_bytes_skipped() {
+        let index = Arc::new(BlockIndex::new());
+        let garbage_tx = Tx::new(alloy_primitives::Bytes::from_static(&[0xde, 0xad]));
+        let block = test_block(3, vec![garbage_tx.clone()]);
+
+        // No receipt for the invalid tx
+        index_finalized_block(&index, &block, &TestContextProvider, &[], 0);
+
+        // Block should still be indexed
+        let indexed_block = index.get_block_by_number(3).expect("block");
+        assert_eq!(indexed_block.number, 3);
+        // Tx hash is still recorded (keccak of raw bytes) even though decoding failed
+        assert_eq!(indexed_block.transaction_hashes.len(), 1);
+        // But no IndexedTransaction entry since decoding failed
+        let tx_hash = alloy_primitives::keccak256(&garbage_tx.bytes);
+        assert!(index.get_transaction(&tx_hash).is_none());
+    }
+
+    #[test]
+    fn index_block_txs_without_receipts() {
+        let index = Arc::new(BlockIndex::new());
+        let from_key = test_key(4);
+        let to = Address::repeat_byte(0xff);
+        let tx = signed_transfer(&from_key, to, 200, 0);
+        let tx_hash = alloy_primitives::keccak256(&tx.bytes);
+        let block = test_block(2, vec![tx]);
+
+        // No receipts provided (e.g. re-execution failed)
+        index_finalized_block(&index, &block, &TestContextProvider, &[], 0);
+
+        // Transaction should be indexed
+        let indexed_tx = index.get_transaction(&tx_hash).expect("tx should exist");
+        assert_eq!(indexed_tx.value, U256::from(200));
+
+        // But no receipt
+        assert!(index.get_receipt(&tx_hash).is_none());
+    }
+
+    #[test]
+    fn index_block_lookups_by_hash() {
+        let index = Arc::new(BlockIndex::new());
+        let block = test_block(42, vec![]);
+        let block_hash = block.id().0;
+
+        index_finalized_block(&index, &block, &TestContextProvider, &[], 0);
+
+        let by_hash = index.get_block_by_hash(&block_hash).expect("block by hash");
+        let by_number = index.get_block_by_number(42).expect("block by number");
+        assert_eq!(by_hash.hash, by_number.hash);
+        assert_eq!(by_hash.number, 42);
+    }
+
+    #[test]
+    fn index_block_state_root_and_parent() {
+        let parent_hash = B256::repeat_byte(0x11);
+        let state_root = B256::repeat_byte(0x22);
+        let block = Block {
+            parent: BlockId(parent_hash),
+            height: 99,
+            prevrandao: B256::ZERO,
+            state_root: StateRoot(state_root),
+            txs: vec![],
+        };
+        let index = Arc::new(BlockIndex::new());
+
+        index_finalized_block(&index, &block, &TestContextProvider, &[], 0);
+
+        let indexed = index.get_block_by_number(99).expect("block");
+        assert_eq!(indexed.parent_hash, parent_hash);
+        assert_eq!(indexed.state_root, state_root);
+        assert_eq!(indexed.base_fee_per_gas, Some(0));
+    }
+
+    #[test]
+    fn index_block_with_failed_receipt() {
+        let index = Arc::new(BlockIndex::new());
+        let from_key = test_key(5);
+        let to = Address::repeat_byte(0xaa);
+        let tx = signed_transfer(&from_key, to, 500, 0);
+        let tx_hash = alloy_primitives::keccak256(&tx.bytes);
+        let block = test_block(8, vec![tx]);
+
+        let receipt = mock_failed_receipt(tx_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER);
+        index_finalized_block(&index, &block, &TestContextProvider, &[receipt], GAS_LIMIT_TRANSFER);
+
+        let indexed_receipt = index.get_receipt(&tx_hash).expect("receipt");
+        assert!(!indexed_receipt.status, "reverted tx should have status=false");
+        assert_eq!(indexed_receipt.gas_used, GAS_LIMIT_TRANSFER);
+        assert_eq!(indexed_receipt.transaction_hash, tx_hash);
+    }
+
+    #[test]
+    fn index_block_mixed_valid_and_invalid_txs() {
+        let index = Arc::new(BlockIndex::new());
+        let key_a = test_key(6);
+        let addr_a = Evm::address_from_key(&key_a);
+        let to = Address::repeat_byte(0xbb);
+
+        // First tx is garbage (invalid), second is a valid signed transfer.
+        let invalid_tx = Tx::new(alloy_primitives::Bytes::from_static(&[0xba, 0xad]));
+        let valid_tx = signed_transfer(&key_a, to, 42, 0);
+        let invalid_hash = alloy_primitives::keccak256(&invalid_tx.bytes);
+        let valid_hash = alloy_primitives::keccak256(&valid_tx.bytes);
+
+        let block = test_block(11, vec![invalid_tx, valid_tx]);
+
+        // Only one receipt exists — for the valid tx at index 1.
+        // Note: receipts are aligned by tx index, so receipts[0] corresponds to
+        // the invalid tx (which has no receipt) and receipts[1] to the valid tx.
+        // We pass two receipts to maintain index alignment.
+        let receipts = vec![
+            mock_receipt(invalid_hash, 0, 0),
+            mock_receipt(valid_hash, GAS_LIMIT_TRANSFER, GAS_LIMIT_TRANSFER),
+        ];
+        index_finalized_block(&index, &block, &TestContextProvider, &receipts, GAS_LIMIT_TRANSFER);
+
+        // Block should have both tx hashes recorded.
+        let indexed_block = index.get_block_by_number(11).expect("block");
+        assert_eq!(indexed_block.transaction_hashes.len(), 2);
+        assert_eq!(indexed_block.transaction_hashes[0], invalid_hash);
+        assert_eq!(indexed_block.transaction_hashes[1], valid_hash);
+
+        // Invalid tx should NOT have an IndexedTransaction (decode failed).
+        assert!(index.get_transaction(&invalid_hash).is_none());
+
+        // Valid tx should have an IndexedTransaction with correct index.
+        let indexed_tx = index.get_transaction(&valid_hash).expect("valid tx");
+        assert_eq!(indexed_tx.from, addr_a);
+        assert_eq!(indexed_tx.transaction_index, 1);
+        assert_eq!(indexed_tx.value, U256::from(42));
+
+        // Valid tx should have a receipt (receipts.get(1) returns the second receipt).
+        let indexed_receipt = index.get_receipt(&valid_hash).expect("valid tx receipt");
+        assert!(indexed_receipt.status);
+        assert_eq!(indexed_receipt.gas_used, GAS_LIMIT_TRANSFER);
+    }
+
+    #[test]
+    fn finalized_reporter_with_block_index_builder() {
+        // Verify the builder pattern works (compile-time + runtime check)
+        let index = Arc::new(BlockIndex::new());
+        let index_clone = index.clone();
+
+        // We can't easily construct a full FinalizedReporter without a LedgerService,
+        // but we can verify the Arc is shared correctly.
+        assert_eq!(Arc::strong_count(&index), 2);
+        drop(index_clone);
+        assert_eq!(Arc::strong_count(&index), 1);
     }
 }

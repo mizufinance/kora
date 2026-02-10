@@ -175,8 +175,7 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
     ///
     /// This spawns background tasks for both HTTP and JSON-RPC servers and returns immediately.
     pub fn start(self) -> RpcServerHandle {
-        let http_addr = self.addr;
-        let jsonrpc_addr = self.addr;
+        let addr = self.addr;
         let node_state = Arc::new(self.state);
         let node_state_for_jsonrpc = Arc::clone(&node_state);
         let chain_id = self.chain_id;
@@ -185,38 +184,20 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
         let max_connections = self.max_connections;
         let state_provider = self.state_provider;
 
-        let http_handle = tokio::spawn(async move {
-            let app = Router::new()
-                .route("/status", get(status_handler))
-                .route("/health", get(health_handler))
-                .layer(cors_layer)
-                .layer(ConcurrencyLimitLayer::new(max_connections as usize))
-                .with_state(node_state);
+        // Signal from the JSON-RPC task to the HTTP task indicating whether it
+        // successfully bound the port. The HTTP status server waits for this
+        // before attempting to bind, so there is no race condition.
+        let (jsonrpc_ready_tx, jsonrpc_ready_rx) = tokio::sync::oneshot::channel::<bool>();
 
-            info!(addr = %http_addr, "Starting HTTP server");
-
-            let listener = match tokio::net::TcpListener::bind(http_addr).await {
-                Ok(l) => l,
-                Err(e) => {
-                    error!(error = %e, "Failed to bind HTTP server");
-                    return;
-                }
-            };
-
-            if let Err(e) = axum::serve(listener, app).await {
-                error!(error = %e, "HTTP server error");
-            }
-        });
-
+        // JSON-RPC server serves eth_*, kora_*, net_*, web3_* methods over both
+        // HTTP and WebSocket. It binds first and signals readiness to the HTTP task.
         let jsonrpc_handle = tokio::spawn(async move {
-            let server = match Server::builder()
-                .max_connections(max_connections)
-                .build(jsonrpc_addr)
-                .await
+            let server = match Server::builder().max_connections(max_connections).build(addr).await
             {
                 Ok(s) => s,
                 Err(e) => {
                     error!(error = %e, "Failed to build JSON-RPC server");
+                    let _ = jsonrpc_ready_tx.send(false);
                     return None;
                 }
             };
@@ -232,26 +213,70 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
             let mut module = jsonrpsee::RpcModule::new(());
             if let Err(e) = module.merge(eth_api.into_rpc()) {
                 error!(error = %e, "Failed to merge eth API");
+                let _ = jsonrpc_ready_tx.send(false);
                 return None;
             }
             if let Err(e) = module.merge(net_api.into_rpc()) {
                 error!(error = %e, "Failed to merge net API");
+                let _ = jsonrpc_ready_tx.send(false);
                 return None;
             }
             if let Err(e) = module.merge(web3_api.into_rpc()) {
                 error!(error = %e, "Failed to merge web3 API");
+                let _ = jsonrpc_ready_tx.send(false);
                 return None;
             }
             if let Err(e) = module.merge(kora_api.into_rpc()) {
                 error!(error = %e, "Failed to merge kora API");
+                let _ = jsonrpc_ready_tx.send(false);
                 return None;
             }
 
-            info!(addr = %jsonrpc_addr, "Starting JSON-RPC server");
+            info!(addr = %addr, "JSON-RPC server started");
+            let _ = jsonrpc_ready_tx.send(true);
 
             let handle = server.start(module);
             handle.stopped().await;
             Some(())
+        });
+
+        // HTTP status server provides /status and /health endpoints.
+        // Waits for the JSON-RPC server to signal readiness before attempting
+        // to bind. If the JSON-RPC server already holds the port, the HTTP
+        // server will not start (this is expected).
+        let http_handle = tokio::spawn(async move {
+            let app = Router::new()
+                .route("/status", get(status_handler))
+                .route("/health", get(health_handler))
+                .layer(cors_layer)
+                .layer(ConcurrencyLimitLayer::new(max_connections as usize))
+                .with_state(node_state);
+
+            // Wait for JSON-RPC server to finish binding before we try.
+            let jsonrpc_bound = jsonrpc_ready_rx.await.unwrap_or(false);
+            if !jsonrpc_bound {
+                error!(addr = %addr, "JSON-RPC server failed to start; HTTP status server will attempt to bind independently");
+            }
+
+            let listener = match tokio::net::TcpListener::bind(addr).await {
+                Ok(l) => l,
+                Err(e) => {
+                    if jsonrpc_bound {
+                        // Expected: JSON-RPC already holds the port.
+                        info!(addr = %addr, "HTTP status server not started (JSON-RPC has the port)");
+                    } else {
+                        // Unexpected: both servers failed to bind.
+                        error!(error = %e, addr = %addr, "HTTP status server failed to bind");
+                    }
+                    return;
+                }
+            };
+
+            info!(addr = %addr, "HTTP status server started");
+
+            if let Err(e) = axum::serve(listener, app).await {
+                error!(error = %e, "HTTP server error");
+            }
         });
 
         RpcServerHandle { http_handle, jsonrpc_handle }
