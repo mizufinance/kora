@@ -6,7 +6,7 @@ use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, rou
 use jsonrpsee::server::{Server, ServerHandle};
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     config::{CorsConfig, RpcServerConfig},
@@ -175,8 +175,7 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
     ///
     /// This spawns background tasks for both HTTP and JSON-RPC servers and returns immediately.
     pub fn start(self) -> RpcServerHandle {
-        let http_addr = self.addr;
-        let jsonrpc_addr = self.addr;
+        let addr = self.addr;
         let node_state = Arc::new(self.state);
         let node_state_for_jsonrpc = Arc::clone(&node_state);
         let chain_id = self.chain_id;
@@ -185,33 +184,13 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
         let max_connections = self.max_connections;
         let state_provider = self.state_provider;
 
-        let http_handle = tokio::spawn(async move {
-            let app = Router::new()
-                .route("/status", get(status_handler))
-                .route("/health", get(health_handler))
-                .layer(cors_layer)
-                .layer(ConcurrencyLimitLayer::new(max_connections as usize))
-                .with_state(node_state);
-
-            info!(addr = %http_addr, "Starting HTTP server");
-
-            let listener = match tokio::net::TcpListener::bind(http_addr).await {
-                Ok(l) => l,
-                Err(e) => {
-                    error!(error = %e, "Failed to bind HTTP server");
-                    return;
-                }
-            };
-
-            if let Err(e) = axum::serve(listener, app).await {
-                error!(error = %e, "HTTP server error");
-            }
-        });
-
+        // Start JSON-RPC server first — it serves eth_*, kora_*, net_*, web3_*
+        // methods over both HTTP and WebSocket. This MUST bind before the HTTP
+        // status server since they share the same port.
         let jsonrpc_handle = tokio::spawn(async move {
             let server = match Server::builder()
                 .max_connections(max_connections)
-                .build(jsonrpc_addr)
+                .build(addr)
                 .await
             {
                 Ok(s) => s,
@@ -247,11 +226,41 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
                 return None;
             }
 
-            info!(addr = %jsonrpc_addr, "Starting JSON-RPC server");
+            info!(addr = %addr, "Starting JSON-RPC server");
 
             let handle = server.start(module);
             handle.stopped().await;
             Some(())
+        });
+
+        // HTTP status server provides /status and /health endpoints.
+        // This may fail to bind if the JSON-RPC server already has the port,
+        // which is expected — JSON-RPC takes priority.
+        let http_handle = tokio::spawn(async move {
+            let app = Router::new()
+                .route("/status", get(status_handler))
+                .route("/health", get(health_handler))
+                .layer(cors_layer)
+                .layer(ConcurrencyLimitLayer::new(max_connections as usize))
+                .with_state(node_state);
+
+            // Brief delay to let JSON-RPC server bind first.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            info!(addr = %addr, "Starting HTTP server");
+
+            let listener = match tokio::net::TcpListener::bind(addr).await {
+                Ok(l) => l,
+                Err(e) => {
+                    // Expected when JSON-RPC server already bound the port.
+                    warn!(error = %e, "HTTP status server not started (JSON-RPC has the port)");
+                    return;
+                }
+            };
+
+            if let Err(e) = axum::serve(listener, app).await {
+                error!(error = %e, "HTTP server error");
+            }
         });
 
         RpcServerHandle { http_handle, jsonrpc_handle }
