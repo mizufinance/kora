@@ -17,9 +17,11 @@ use commonware_utils::{NZU64, NZUsize, acknowledgement::Exact};
 use futures::StreamExt;
 use kora_domain::{Block, BlockCfg, BootstrapConfig, ConsensusDigest, LedgerEvent, TxCfg};
 use kora_executor::{BlockContext, RevmExecutor};
+use kora_indexer::BlockIndex;
 use kora_ledger::{LedgerService, LedgerView};
 use kora_marshal::{ArchiveInitializer, BroadcastInitializer, PeerInitializer};
 use kora_reporters::{BlockContextProvider, FinalizedReporter, NodeStateReporter, SeedReporter};
+use kora_rpc::IndexedStateProvider;
 use kora_service::{NodeRunContext, NodeRunner};
 use kora_simplex::{DEFAULT_MAILBOX_SIZE as MAILBOX_SIZE, DefaultPool};
 use kora_transport::NetworkTransport;
@@ -154,16 +156,8 @@ impl ProductionRunner {
         use commonware_runtime::Runner;
         use kora_transport::NetworkConfigExt;
 
-        let rpc_config = self.rpc_config.clone();
-
         let executor = tokio::Runner::default();
         executor.start(|context| async move {
-            // Start RPC server if configured
-            if let Some((state, addr)) = rpc_config {
-                let rpc = kora_rpc::RpcServer::new(state, addr);
-                drop(rpc.start());
-            }
-
             let validator_key = config
                 .validator_key()
                 .map_err(|e| anyhow::anyhow!("failed to load validator key: {}", e))?;
@@ -213,6 +207,9 @@ impl NodeRunner for ProductionRunner {
         let ledger = LedgerService::new(state.clone());
         spawn_ledger_observers(ledger.clone(), context.clone());
 
+        // Create a shared block index for RPC queries.
+        let block_index = Arc::new(BlockIndex::new());
+
         let validator_key = config
             .validator_key()
             .map_err(|e| anyhow::anyhow!("failed to load validator key: {}", e))?;
@@ -221,7 +218,8 @@ impl NodeRunner for ProductionRunner {
         let executor = RevmExecutor::new(self.chain_id);
         let context_provider = RevmContextProvider { gas_limit: self.gas_limit };
         let finalized_reporter =
-            FinalizedReporter::new(ledger.clone(), context.clone(), executor, context_provider);
+            FinalizedReporter::new(ledger.clone(), context.clone(), executor, context_provider)
+                .with_block_index(block_index.clone());
 
         let scheme_provider = ConstantSchemeProvider::from(self.scheme.clone());
 
@@ -323,6 +321,20 @@ impl NodeRunner for ProductionRunner {
             },
         );
         engine.start(transport.simplex.votes, transport.simplex.certs, transport.simplex.resolver);
+
+        // Start RPC server with IndexedStateProvider if configured.
+        if let Some((node_state, addr)) = &self.rpc_config {
+            let qmdb_state = ledger.qmdb_state().await;
+            let provider = IndexedStateProvider::new(block_index, qmdb_state);
+            let rpc = kora_rpc::RpcServer::with_state_provider(
+                node_state.clone(),
+                *addr,
+                self.chain_id,
+                provider,
+            );
+            drop(rpc.start());
+            info!(addr = %addr, "RPC server started with indexed state provider");
+        }
 
         info!("Validator started successfully");
         Ok(ledger)

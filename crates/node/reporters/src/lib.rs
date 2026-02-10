@@ -4,8 +4,10 @@
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
-use std::{fmt, marker::PhantomData};
+use std::{fmt, marker::PhantomData, sync::Arc};
 
+use alloy_consensus::{Transaction as _, TxEnvelope, transaction::SignerRecoverable as _};
+use alloy_eips::eip2718::Decodable2718 as _;
 use alloy_primitives::{B256, Bytes, keccak256};
 use commonware_consensus::{
     Block as _, Reporter,
@@ -20,7 +22,8 @@ use commonware_runtime::{Spawner as _, tokio};
 use commonware_utils::acknowledgement::Acknowledgement as _;
 use kora_consensus::BlockExecution;
 use kora_domain::{Block, ConsensusDigest, PublicKey};
-use kora_executor::{BlockContext, BlockExecutor};
+use kora_executor::{BlockContext, BlockExecutor, ExecutionReceipt};
+use kora_indexer::{BlockIndex, IndexedBlock, IndexedLog, IndexedReceipt, IndexedTransaction};
 use kora_ledger::LedgerService;
 use kora_overlay::OverlayState;
 use kora_qmdb_ledger::QmdbState;
@@ -105,6 +108,7 @@ async fn handle_finalized_update<E, P>(
     executor: E,
     provider: P,
     update: Update<Block>,
+    block_index: Option<Arc<BlockIndex>>,
 ) where
     E: BlockExecutor<OverlayState<QmdbState>, Tx = Bytes>,
     P: BlockContextProvider,
@@ -113,6 +117,8 @@ async fn handle_finalized_update<E, P>(
         Update::Tip(..) => {}
         Update::Block(block, ack) => {
             let digest = block.commitment();
+            let mut cached_receipts: Option<(Vec<ExecutionReceipt>, u64)> = None;
+
             if state.query_state_root(digest).await.is_none() {
                 trace!(?digest, "missing snapshot for finalized block; re-executing");
                 let parent_digest = block.parent();
@@ -160,6 +166,11 @@ async fn handle_finalized_update<E, P>(
                     ack.acknowledge();
                     return;
                 }
+                // Save receipts for indexing before consuming changes.
+                let receipts = execution.outcome.receipts;
+                let gas_used = execution.outcome.gas_used;
+                cached_receipts = Some((receipts, gas_used));
+
                 let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
                 state
                     .insert_snapshot(
@@ -191,12 +202,143 @@ async fn handle_finalized_update<E, P>(
                 ack.acknowledge();
                 return;
             }
+
+            // Index the finalized block if a block index is present.
+            if let Some(ref index) = block_index {
+                let (receipts, gas_used) = match cached_receipts {
+                    Some(cached) => cached,
+                    None => {
+                        // Cached-snapshot path: re-execute to get receipts for indexing.
+                        match re_execute_for_receipts(&state, &executor, &provider, &block).await {
+                            Some(result) => result,
+                            None => {
+                                warn!(
+                                    height = block.height,
+                                    "failed to obtain receipts for indexing"
+                                );
+                                (Vec::new(), 0)
+                            }
+                        }
+                    }
+                };
+                index_finalized_block(index, &block, &provider, &receipts, gas_used);
+            }
+
             state.prune_mempool(&block.txs).await;
             // Marshal waits for the application to acknowledge processing before advancing the
             // delivery floor. Without this, the node can stall on finalized block delivery.
             ack.acknowledge();
         }
     }
+}
+
+/// Re-execute a finalized block to obtain receipts for indexing.
+async fn re_execute_for_receipts<E, P>(
+    state: &LedgerService,
+    executor: &E,
+    provider: &P,
+    block: &Block,
+) -> Option<(Vec<ExecutionReceipt>, u64)>
+where
+    E: BlockExecutor<OverlayState<QmdbState>, Tx = Bytes>,
+    P: BlockContextProvider,
+{
+    let parent_digest = block.parent();
+    let parent_snapshot = state.parent_snapshot(parent_digest).await?;
+    let block_context = provider.context(block);
+    let execution =
+        BlockExecution::execute(&parent_snapshot, executor, &block_context, &block.txs).await.ok()?;
+    Some((execution.outcome.receipts, execution.outcome.gas_used))
+}
+
+/// Index a finalized block into the block index.
+fn index_finalized_block<P: BlockContextProvider>(
+    index: &BlockIndex,
+    block: &Block,
+    provider: &P,
+    receipts: &[ExecutionReceipt],
+    gas_used: u64,
+) {
+    let block_hash = block.id().0;
+    let block_context = provider.context(block);
+
+    let mut tx_hashes = Vec::with_capacity(block.txs.len());
+    let mut indexed_txs = Vec::with_capacity(block.txs.len());
+    let mut indexed_receipts = Vec::with_capacity(receipts.len());
+
+    for (i, tx) in block.txs.iter().enumerate() {
+        let tx_hash = keccak256(&tx.bytes);
+
+        let Ok(envelope) = TxEnvelope::decode_2718(&mut tx.bytes.as_ref()) else {
+            warn!(height = block.height, index = i, "failed to decode tx for indexing");
+            tx_hashes.push(tx_hash);
+            continue;
+        };
+        let Ok(sender) = envelope.recover_signer() else {
+            warn!(height = block.height, index = i, "failed to recover sender for indexing");
+            tx_hashes.push(tx_hash);
+            continue;
+        };
+
+        tx_hashes.push(tx_hash);
+
+        indexed_txs.push(IndexedTransaction {
+            hash: tx_hash,
+            block_hash,
+            block_number: block.height,
+            index: i as u64,
+            from: sender,
+            to: envelope.to(),
+            value: envelope.value(),
+            gas_limit: envelope.gas_limit(),
+            gas_price: envelope.gas_price().unwrap_or_else(|| envelope.max_fee_per_gas()),
+            input: envelope.input().clone(),
+            nonce: envelope.nonce(),
+        });
+
+        if let Some(receipt) = receipts.get(i) {
+            let logs = receipt
+                .logs()
+                .iter()
+                .enumerate()
+                .map(|(li, log)| IndexedLog {
+                    address: log.address,
+                    topics: log.data.topics().to_vec(),
+                    data: log.data.data.clone(),
+                    log_index: li as u64,
+                })
+                .collect();
+
+            indexed_receipts.push(IndexedReceipt {
+                transaction_hash: tx_hash,
+                block_hash,
+                block_number: block.height,
+                transaction_index: i as u64,
+                from: sender,
+                to: envelope.to(),
+                cumulative_gas_used: receipt.cumulative_gas_used(),
+                gas_used: receipt.gas_used,
+                contract_address: receipt.contract_address,
+                logs,
+                status: receipt.success(),
+            });
+        }
+    }
+
+    let indexed_block = IndexedBlock {
+        hash: block_hash,
+        number: block.height,
+        parent_hash: block.parent.0,
+        state_root: block.state_root.0,
+        timestamp: block.height,
+        gas_limit: block_context.header.gas_limit,
+        gas_used,
+        base_fee_per_gas: block_context.header.base_fee_per_gas,
+        transaction_hashes: tx_hashes,
+    };
+
+    index.insert_block(indexed_block, indexed_txs, indexed_receipts);
+    trace!(height = block.height, "indexed finalized block");
 }
 
 #[derive(Clone)]
@@ -210,6 +352,8 @@ pub struct FinalizedReporter<E, P> {
     executor: E,
     /// Provider that builds block execution context.
     provider: P,
+    /// Optional block index for indexing finalized blocks for RPC queries.
+    block_index: Option<Arc<BlockIndex>>,
 }
 
 impl<E, P> fmt::Debug for FinalizedReporter<E, P> {
@@ -230,7 +374,14 @@ where
         executor: E,
         provider: P,
     ) -> Self {
-        Self { state, context, executor, provider }
+        Self { state, context, executor, provider, block_index: None }
+    }
+
+    /// Set the block index for indexing finalized blocks.
+    #[must_use]
+    pub fn with_block_index(mut self, index: Arc<BlockIndex>) -> Self {
+        self.block_index = Some(index);
+        self
     }
 }
 
@@ -246,8 +397,9 @@ where
         let context = self.context.clone();
         let executor = self.executor.clone();
         let provider = self.provider.clone();
+        let block_index = self.block_index.clone();
         async move {
-            handle_finalized_update(state, context, executor, provider, update).await;
+            handle_finalized_update(state, context, executor, provider, update, block_index).await;
         }
     }
 }

@@ -3586,6 +3586,8 @@ dependencies = [
 name = "kora-reporters"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
  "alloy-primitives",
  "commonware-codec",
  "commonware-consensus",
@@ -3595,6 +3597,7 @@ dependencies = [
  "kora-consensus",
  "kora-domain",
  "kora-executor",
+ "kora-indexer",
  "kora-ledger",
  "kora-overlay",
  "kora-qmdb-ledger",
@@ -3642,6 +3645,7 @@ dependencies = [
  "kora-dkg",
  "kora-domain",
  "kora-executor",
+ "kora-indexer",
  "kora-ledger",
  "kora-marshal",
  "kora-overlay",
