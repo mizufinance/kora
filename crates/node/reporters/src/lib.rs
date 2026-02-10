@@ -195,6 +195,16 @@ async fn handle_finalized_update<E, P>(
             } else {
                 trace!(?digest, "using cached snapshot for finalized block");
             }
+
+            // Obtain receipts BEFORE persisting, because persist_snapshot mutates
+            // the QMDB base state, invalidating overlay states that reference it.
+            // Re-executing after persistence would see post-commit state and fail
+            // with nonce/balance mismatches.
+            if block_index.is_some() && cached_receipts.is_none() {
+                cached_receipts =
+                    re_execute_for_receipts(&state, &executor, &provider, &block).await;
+            }
+
             let persist_state = state.clone();
             let persist_handle = context
                 .shared(true)
