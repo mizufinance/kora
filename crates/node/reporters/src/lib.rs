@@ -624,7 +624,7 @@ mod tests {
     use kora_executor::{BlockContext, ExecutionReceipt};
     use kora_indexer::BlockIndex;
 
-    use super::{BlockContextProvider, index_finalized_block};
+    use super::{BlockContextProvider, build_subscription_data, index_finalized_block};
 
     const GAS_LIMIT: u64 = 30_000_000;
     const CHAIN_ID: u64 = 1337;
@@ -1042,5 +1042,71 @@ mod tests {
         assert_eq!(Arc::strong_count(&index), 2);
         drop(index_clone);
         assert_eq!(Arc::strong_count(&index), 1);
+    }
+
+    #[test]
+    fn build_subscription_data_empty_block() {
+        let block = test_block(10, vec![]);
+        let (rpc_block, rpc_logs) = build_subscription_data(&block, &TestContextProvider, &[], 0);
+
+        assert_eq!(rpc_block.number, alloy_primitives::U64::from(10));
+        assert_eq!(rpc_block.hash, block.id().0);
+        assert_eq!(rpc_block.parent_hash, B256::ZERO);
+        assert_eq!(rpc_block.state_root, block.state_root.0);
+        assert_eq!(rpc_block.gas_used, alloy_primitives::U64::ZERO);
+        assert_eq!(rpc_block.gas_limit, alloy_primitives::U64::from(GAS_LIMIT));
+        assert_eq!(rpc_block.timestamp, alloy_primitives::U64::from(10));
+        assert!(rpc_logs.is_empty());
+    }
+
+    #[test]
+    fn build_subscription_data_with_logs() {
+        let from_key = test_key(1);
+        let to = Address::repeat_byte(0xdd);
+        let log_addr_a = Address::repeat_byte(0xaa);
+        let log_addr_b = Address::repeat_byte(0xbb);
+
+        let tx_a = signed_transfer(&from_key, to, 10, 0);
+        let tx_b = signed_transfer(&from_key, to, 20, 1);
+        let hash_a = alloy_primitives::keccak256(&tx_a.bytes);
+        let hash_b = alloy_primitives::keccak256(&tx_b.bytes);
+
+        let block = test_block(5, vec![tx_a, tx_b]);
+        let block_hash = block.id().0;
+
+        // tx_a has 1 log, tx_b has 2 logs.
+        let receipt_a = mock_receipt_with_log(hash_a, 21_000, 21_000, log_addr_a);
+        let receipt_b = mock_receipt_with_logs(hash_b, 21_000, 42_000, &[log_addr_b, log_addr_b]);
+        let total_gas = 42_000;
+
+        let (rpc_block, rpc_logs) = build_subscription_data(
+            &block,
+            &TestContextProvider,
+            &[receipt_a, receipt_b],
+            total_gas,
+        );
+
+        // Block fields.
+        assert_eq!(rpc_block.number, alloy_primitives::U64::from(5));
+        assert_eq!(rpc_block.gas_used, alloy_primitives::U64::from(total_gas));
+
+        // Should have 3 logs total.
+        assert_eq!(rpc_logs.len(), 3);
+
+        // First log from tx_a.
+        assert_eq!(rpc_logs[0].address, log_addr_a);
+        assert_eq!(rpc_logs[0].block_hash, block_hash);
+        assert_eq!(rpc_logs[0].transaction_hash, hash_a);
+        assert_eq!(rpc_logs[0].log_index, alloy_primitives::U64::ZERO);
+        assert_eq!(rpc_logs[0].transaction_index, alloy_primitives::U64::ZERO);
+
+        // Second and third logs from tx_b (log_index continues from tx_a).
+        assert_eq!(rpc_logs[1].address, log_addr_b);
+        assert_eq!(rpc_logs[1].transaction_hash, hash_b);
+        assert_eq!(rpc_logs[1].log_index, alloy_primitives::U64::from(1));
+        assert_eq!(rpc_logs[1].transaction_index, alloy_primitives::U64::from(1));
+
+        assert_eq!(rpc_logs[2].log_index, alloy_primitives::U64::from(2));
+        assert_eq!(rpc_logs[2].transaction_index, alloy_primitives::U64::from(1));
     }
 }

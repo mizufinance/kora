@@ -430,12 +430,16 @@ impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
     }
 
     /// Start the JSON-RPC server.
-    pub async fn start(self) -> Result<ServerHandle, ServerError> {
+    ///
+    /// Returns the server handle and the actual bound address (useful when binding to port 0).
+    pub async fn start(self) -> Result<(ServerHandle, SocketAddr), ServerError> {
         let server = Server::builder()
             .max_connections(self.max_connections)
             .build(self.addr)
             .await
             .map_err(|e| ServerError::Build(e.to_string()))?;
+
+        let local_addr = server.local_addr().map_err(|e| ServerError::Build(e.to_string()))?;
 
         let eth_api = self.tx_submit.map_or_else(
             || EthApiImpl::new(self.chain_id, self.state_provider.clone()),
@@ -453,9 +457,9 @@ impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
             module.merge(sub_api.into_rpc())?;
         }
 
-        info!(addr = %self.addr, "Starting JSON-RPC server");
+        info!(addr = %local_addr, "Starting JSON-RPC server");
 
-        Ok(server.start(module))
+        Ok((server.start(module), local_addr))
     }
 }
 

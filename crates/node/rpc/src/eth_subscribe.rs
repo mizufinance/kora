@@ -194,6 +194,28 @@ mod tests {
     use alloy_primitives::{Address, B256, Bytes, U64};
 
     use super::*;
+    use crate::server::JsonRpcServer;
+
+    /// Spins up a [`JsonRpcServer`] on an ephemeral port with subscription support.
+    ///
+    /// Returns the server handle, the bound address, and the broadcast senders
+    /// for heads and logs.
+    async fn setup_test_server() -> (
+        jsonrpsee::server::ServerHandle,
+        std::net::SocketAddr,
+        broadcast::Sender<RpcBlock>,
+        broadcast::Sender<Vec<RpcLog>>,
+    ) {
+        let heads_tx = broadcast::channel::<RpcBlock>(16).0;
+        let logs_tx = broadcast::channel::<Vec<RpcLog>>(16).0;
+
+        let addr: std::net::SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let server =
+            JsonRpcServer::new(addr, 1).with_subscriptions(heads_tx.clone(), logs_tx.clone());
+
+        let (handle, bound_addr) = server.start().await.expect("server should start");
+        (handle, bound_addr, heads_tx, logs_tx)
+    }
 
     fn make_log(address: Address, topics: Vec<B256>) -> RpcLog {
         RpcLog {
@@ -331,5 +353,215 @@ mod tests {
         assert_eq!(filter.topics.len(), 2);
         assert_eq!(filter.topics[0].len(), 1);
         assert!(filter.topics[1].is_empty()); // None -> wildcard
+    }
+
+    // ---- Integration tests exercising real WebSocket subscriptions ----
+
+    use std::time::Duration;
+
+    use jsonrpsee::core::client::SubscriptionClientT;
+
+    use crate::types::BlockTransactions;
+
+    fn make_rpc_block(number: u64, hash: B256) -> RpcBlock {
+        RpcBlock {
+            hash,
+            number: U64::from(number),
+            timestamp: U64::from(1_000_000 + number),
+            gas_limit: U64::from(30_000_000u64),
+            transactions: BlockTransactions::Hashes(vec![]),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_newheads_subscription() {
+        let (_handle, addr, heads_tx, _logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let client = jsonrpsee::ws_client::WsClientBuilder::default()
+            .build(&url)
+            .await
+            .expect("ws client should connect");
+
+        let mut sub = client
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["newHeads"],
+                "eth_unsubscribe",
+            )
+            .await
+            .expect("subscribe should succeed");
+
+        let block = make_rpc_block(42, B256::repeat_byte(0xab));
+        heads_tx.send(block).unwrap();
+
+        let notif = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("should receive within timeout")
+            .expect("subscription should yield a value");
+
+        let value = notif.expect("notification should not be an error");
+        assert_eq!(value["number"], serde_json::json!(U64::from(42)));
+        assert_eq!(value["hash"], serde_json::json!(B256::repeat_byte(0xab)));
+    }
+
+    #[tokio::test]
+    async fn test_logs_subscription_no_filter() {
+        let (_handle, addr, _heads_tx, logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let client = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+
+        let mut sub = client
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["logs"],
+                "eth_unsubscribe",
+            )
+            .await
+            .unwrap();
+
+        let log = make_log(Address::repeat_byte(0x11), vec![B256::repeat_byte(0xcc)]);
+        logs_tx.send(vec![log]).unwrap();
+
+        let notif = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("should receive within timeout")
+            .expect("subscription should yield")
+            .expect("should not be error");
+
+        assert_eq!(notif["address"], serde_json::json!(Address::repeat_byte(0x11)));
+    }
+
+    #[tokio::test]
+    async fn test_logs_subscription_address_filter() {
+        let (_handle, addr, _heads_tx, logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let client = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+
+        let target = Address::repeat_byte(0x42);
+        let filter_params = serde_json::json!({"address": format!("{target}")});
+        let mut sub = client
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["logs", filter_params],
+                "eth_unsubscribe",
+            )
+            .await
+            .unwrap();
+
+        // Send logs from two different addresses.
+        let other = Address::repeat_byte(0x99);
+        let log_match = make_log(target, vec![]);
+        let log_other = make_log(other, vec![]);
+        logs_tx.send(vec![log_other, log_match]).unwrap();
+
+        // Only the matching log should arrive.
+        let notif = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("should receive within timeout")
+            .expect("subscription should yield")
+            .expect("should not be error");
+
+        assert_eq!(notif["address"], serde_json::json!(target));
+
+        // No second notification should arrive (the non-matching log is filtered).
+        let timeout_result = tokio::time::timeout(Duration::from_millis(200), sub.next()).await;
+        assert!(timeout_result.is_err(), "should not receive a second log");
+    }
+
+    #[tokio::test]
+    async fn test_logs_subscription_topic_filter() {
+        let (_handle, addr, _heads_tx, logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let client = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+
+        let wanted_topic = B256::repeat_byte(0xaa);
+        let filter_params = serde_json::json!({
+            "topics": [format!("{wanted_topic}")]
+        });
+        let mut sub = client
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["logs", filter_params],
+                "eth_unsubscribe",
+            )
+            .await
+            .unwrap();
+
+        let log_match = make_log(Address::ZERO, vec![wanted_topic]);
+        let log_miss = make_log(Address::ZERO, vec![B256::repeat_byte(0xbb)]);
+        logs_tx.send(vec![log_miss, log_match]).unwrap();
+
+        let notif = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("should receive within timeout")
+            .expect("subscription should yield")
+            .expect("should not be error");
+
+        assert_eq!(notif["topics"][0], serde_json::json!(wanted_topic));
+
+        // Non-matching log should have been filtered out.
+        let timeout_result = tokio::time::timeout(Duration::from_millis(200), sub.next()).await;
+        assert!(timeout_result.is_err(), "should not receive a second log");
+    }
+
+    #[tokio::test]
+    async fn test_unknown_subscription_rejected() {
+        let (_handle, addr, _heads_tx, _logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let client = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+
+        let result = client
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["newPendingTransactions"],
+                "eth_unsubscribe",
+            )
+            .await;
+
+        assert!(result.is_err(), "unsupported subscription kind should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_subscribers() {
+        let (_handle, addr, heads_tx, _logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+
+        let client_a = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+        let client_b = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+
+        let mut sub_a = client_a
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["newHeads"],
+                "eth_unsubscribe",
+            )
+            .await
+            .unwrap();
+        let mut sub_b = client_b
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["newHeads"],
+                "eth_unsubscribe",
+            )
+            .await
+            .unwrap();
+
+        let block = make_rpc_block(7, B256::repeat_byte(0x77));
+        heads_tx.send(block).unwrap();
+
+        let notif_a = tokio::time::timeout(Duration::from_secs(2), sub_a.next())
+            .await
+            .expect("sub_a should receive")
+            .expect("sub_a should yield")
+            .expect("sub_a should not error");
+        let notif_b = tokio::time::timeout(Duration::from_secs(2), sub_b.next())
+            .await
+            .expect("sub_b should receive")
+            .expect("sub_b should yield")
+            .expect("sub_b should not error");
+
+        assert_eq!(notif_a["number"], serde_json::json!(U64::from(7)));
+        assert_eq!(notif_b["number"], serde_json::json!(U64::from(7)));
     }
 }

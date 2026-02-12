@@ -45,3 +45,4 @@ kora-traits = { path = "../../storage/traits" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
+jsonrpsee = { version = "0.24", features = ["ws-client"] }
