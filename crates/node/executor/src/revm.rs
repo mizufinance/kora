@@ -280,7 +280,10 @@ impl<S: StateDb> BlockExecutor<S> for RevmExecutor {
 /// Decode transaction bytes into a REVM TxEnv.
 ///
 /// Currently supports basic transaction decoding for all Ethereum transaction types.
-fn decode_tx_env(tx_bytes: &Bytes, _chain_id: u64) -> Result<revm::context::TxEnv, ExecutionError> {
+pub fn decode_tx_env(
+    tx_bytes: &Bytes,
+    _chain_id: u64,
+) -> Result<revm::context::TxEnv, ExecutionError> {
     use alloy_consensus::TxEnvelope;
     use alloy_rlp::Decodable;
 
@@ -390,7 +393,7 @@ fn decode_tx_env(tx_bytes: &Bytes, _chain_id: u64) -> Result<revm::context::TxEn
 }
 
 /// Convert alloy TxKind to revm TxKind.
-const fn convert_tx_kind(kind: alloy_primitives::TxKind) -> TxKind {
+pub const fn convert_tx_kind(kind: alloy_primitives::TxKind) -> TxKind {
     match kind {
         alloy_primitives::TxKind::Call(addr) => TxKind::Call(addr),
         alloy_primitives::TxKind::Create => TxKind::Create,
@@ -398,7 +401,7 @@ const fn convert_tx_kind(kind: alloy_primitives::TxKind) -> TxKind {
 }
 
 /// Convert alloy AccessList to revm AccessList.
-fn convert_access_list(access_list: &alloy_eips::eip2930::AccessList) -> AccessList {
+pub fn convert_access_list(access_list: &alloy_eips::eip2930::AccessList) -> AccessList {
     AccessList(
         access_list
             .iter()
@@ -411,7 +414,7 @@ fn convert_access_list(access_list: &alloy_eips::eip2930::AccessList) -> AccessL
 }
 
 /// Convert alloy authorization list to revm authorization list.
-fn convert_authorization_list(
+pub fn convert_authorization_list(
     auth_list: &[alloy_eips::eip7702::SignedAuthorization],
 ) -> Vec<
     revm::context_interface::either::Either<
@@ -447,7 +450,7 @@ fn convert_authorization_list(
 }
 
 /// Build a transaction receipt from execution result.
-fn build_receipt(
+pub fn build_receipt(
     result: &ExecutionResult,
     tx_hash: B256,
     gas_used: u64,
@@ -470,7 +473,7 @@ fn build_receipt(
 }
 
 /// Extract state changes from REVM execution state.
-fn extract_changes(state: EvmState) -> ChangeSet {
+pub fn extract_changes(state: EvmState) -> ChangeSet {
     let mut changes = ChangeSet::new();
 
     for (address, account) in state {

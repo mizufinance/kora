@@ -1,6 +1,9 @@
 //! REVM-based consensus application implementation.
 
-use std::{collections::BTreeSet, time::Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use alloy_consensus::Header;
 use alloy_primitives::{Address, B256, Bytes};
@@ -64,10 +67,10 @@ where
         self
     }
 
-    fn block_context(&self, height: u64, prevrandao: B256) -> BlockContext {
+    fn block_context(&self, height: u64, timestamp: u64, prevrandao: B256) -> BlockContext {
         let header = Header {
             number: height,
-            timestamp: height,
+            timestamp,
             gas_limit: self.gas_limit,
             beneficiary: Address::ZERO,
             base_fee_per_gas: Some(0),
@@ -94,7 +97,11 @@ where
 
         let prevrandao = self.get_prevrandao(parent_digest).await;
         let height = parent.height + 1;
-        let context = self.block_context(height, prevrandao);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_secs();
+        let context = self.block_context(height, timestamp, prevrandao);
         let txs_bytes: Vec<Bytes> = txs.iter().map(|tx| tx.bytes.clone()).collect();
 
         let exec_start = Instant::now();
@@ -109,7 +116,7 @@ where
             .ok()?;
         let root_elapsed = root_start.elapsed();
 
-        let block = Block { parent: parent.id(), height, prevrandao, state_root, txs };
+        let block = Block { parent: parent.id(), height, timestamp, prevrandao, state_root, txs };
 
         let merged_changes = parent_snapshot.state.merge_changes(outcome.changes.clone());
         let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
@@ -140,7 +147,9 @@ where
         Some(block)
     }
 
-    async fn verify_block(&self, block: &Block) -> bool {
+    async fn verify_block(&self, block: &Block, parent_timestamp: u64) -> bool {
+        const MAX_CLOCK_DRIFT_SECS: u64 = 15;
+
         let start = Instant::now();
         let digest = block.commitment();
         let parent_digest = block.parent();
@@ -150,13 +159,33 @@ where
             return true;
         }
 
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_secs();
+
+        if block.timestamp <= parent_timestamp {
+            warn!(
+                ?digest,
+                block_ts = block.timestamp,
+                parent_ts = parent_timestamp,
+                "block timestamp not after parent"
+            );
+            return false;
+        }
+
+        if block.timestamp > now + MAX_CLOCK_DRIFT_SECS {
+            warn!(?digest, block_ts = block.timestamp, now, "block timestamp too far in future");
+            return false;
+        }
+
         let Some(parent_snapshot) = self.ledger.parent_snapshot(parent_digest).await else {
             warn!(?digest, ?parent_digest, height = block.height, "missing parent snapshot");
             return false;
         };
         let snapshot_elapsed = start.elapsed();
 
-        let context = self.block_context(block.height, block.prevrandao);
+        let context = self.block_context(block.height, block.timestamp, block.prevrandao);
         let exec_start = Instant::now();
         let execution =
             match BlockExecution::execute(&parent_snapshot, &self.executor, &context, &block.txs)
@@ -331,10 +360,12 @@ where
 
             // Verify from oldest (parent) to newest (tip)
             let verify_start = Instant::now();
+            let mut parent_timestamp = 0u64;
             for block in blocks_to_verify.into_iter().rev() {
-                if !self.verify_block(&block).await {
+                if !self.verify_block(&block, parent_timestamp).await {
                     return false;
                 }
+                parent_timestamp = block.timestamp;
             }
             let verify_elapsed = verify_start.elapsed();
             let total_elapsed = start.elapsed();
