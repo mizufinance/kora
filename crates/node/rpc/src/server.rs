@@ -4,6 +4,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use jsonrpsee::server::{Server, ServerHandle};
+use tokio::sync::broadcast;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tracing::{error, info};
@@ -14,9 +15,11 @@ use crate::{
         EthApiImpl, EthApiServer, NetApiImpl, NetApiServer, TxSubmitCallback, Web3ApiImpl,
         Web3ApiServer,
     },
+    eth_subscribe::{EthSubscriptionApiImpl, EthSubscriptionApiServer},
     kora::{KoraApiImpl, KoraApiServer},
     state::NodeState,
     state_provider::{NoopStateProvider, StateProvider},
+    types::{RpcBlock, RpcLog},
 };
 
 /// Error type for RPC server operations.
@@ -77,6 +80,8 @@ pub struct RpcServer<S: StateProvider = NoopStateProvider> {
     state_provider: S,
     cors_config: CorsConfig,
     max_connections: u32,
+    subscription_heads: Option<broadcast::Sender<RpcBlock>>,
+    subscription_logs: Option<broadcast::Sender<Vec<RpcLog>>>,
 }
 
 impl<S: StateProvider> std::fmt::Debug for RpcServer<S> {
@@ -86,6 +91,7 @@ impl<S: StateProvider> std::fmt::Debug for RpcServer<S> {
             .field("addr", &self.addr)
             .field("chain_id", &self.chain_id)
             .field("tx_submit", &self.tx_submit.is_some())
+            .field("subscriptions", &self.subscription_heads.is_some())
             .finish()
     }
 }
@@ -101,6 +107,8 @@ impl RpcServer<NoopStateProvider> {
             state_provider: NoopStateProvider,
             cors_config: CorsConfig::default(),
             max_connections: 100,
+            subscription_heads: None,
+            subscription_logs: None,
         }
     }
 
@@ -114,6 +122,8 @@ impl RpcServer<NoopStateProvider> {
             state_provider: NoopStateProvider,
             cors_config: CorsConfig::default(),
             max_connections: 100,
+            subscription_heads: None,
+            subscription_logs: None,
         }
     }
 }
@@ -134,6 +144,8 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
             state_provider,
             cors_config: CorsConfig::default(),
             max_connections: 100,
+            subscription_heads: None,
+            subscription_logs: None,
         }
     }
 
@@ -158,6 +170,18 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
         self
     }
 
+    /// Set subscription broadcast senders for `eth_subscribe` support.
+    #[must_use]
+    pub fn with_subscriptions(
+        mut self,
+        heads_tx: broadcast::Sender<RpcBlock>,
+        logs_tx: broadcast::Sender<Vec<RpcLog>>,
+    ) -> Self {
+        self.subscription_heads = Some(heads_tx);
+        self.subscription_logs = Some(logs_tx);
+        self
+    }
+
     /// Create from configuration.
     pub fn from_config(state: NodeState, config: RpcServerConfig, state_provider: S) -> Self {
         Self {
@@ -168,6 +192,8 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
             state_provider,
             cors_config: config.cors,
             max_connections: config.max_connections,
+            subscription_heads: None,
+            subscription_logs: None,
         }
     }
 
@@ -183,6 +209,8 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
         let cors_layer = build_cors_layer(&self.cors_config);
         let max_connections = self.max_connections;
         let state_provider = self.state_provider;
+        let subscription_heads = self.subscription_heads;
+        let subscription_logs = self.subscription_logs;
 
         // Signal from the JSON-RPC task to the HTTP task indicating whether it
         // successfully bound the port. The HTTP status server waits for this
@@ -230,6 +258,14 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
                 error!(error = %e, "Failed to merge kora API");
                 let _ = jsonrpc_ready_tx.send(false);
                 return None;
+            }
+            if let (Some(heads_tx), Some(logs_tx)) = (subscription_heads, subscription_logs) {
+                let sub_api = EthSubscriptionApiImpl::new(heads_tx, logs_tx);
+                if let Err(e) = module.merge(sub_api.into_rpc()) {
+                    error!(error = %e, "Failed to merge subscription API");
+                    let _ = jsonrpc_ready_tx.send(false);
+                    return None;
+                }
             }
 
             info!(addr = %addr, "JSON-RPC server started");
@@ -324,6 +360,8 @@ pub struct JsonRpcServer<S: StateProvider = NoopStateProvider> {
     tx_submit: Option<TxSubmitCallback>,
     state_provider: S,
     max_connections: u32,
+    subscription_heads: Option<broadcast::Sender<RpcBlock>>,
+    subscription_logs: Option<broadcast::Sender<Vec<RpcLog>>>,
 }
 
 impl<S: StateProvider> std::fmt::Debug for JsonRpcServer<S> {
@@ -345,6 +383,8 @@ impl JsonRpcServer<NoopStateProvider> {
             tx_submit: None,
             state_provider: NoopStateProvider,
             max_connections: 100,
+            subscription_heads: None,
+            subscription_logs: None,
         }
     }
 }
@@ -352,7 +392,15 @@ impl JsonRpcServer<NoopStateProvider> {
 impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
     /// Create a new JSON-RPC server with a custom state provider.
     pub fn with_state_provider(addr: SocketAddr, chain_id: u64, state_provider: S) -> Self {
-        Self { addr, chain_id, tx_submit: None, state_provider, max_connections: 100 }
+        Self {
+            addr,
+            chain_id,
+            tx_submit: None,
+            state_provider,
+            max_connections: 100,
+            subscription_heads: None,
+            subscription_logs: None,
+        }
     }
 
     /// Set the transaction submission callback.
@@ -366,6 +414,18 @@ impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
     #[must_use]
     pub const fn with_max_connections(mut self, max_connections: u32) -> Self {
         self.max_connections = max_connections;
+        self
+    }
+
+    /// Set subscription broadcast senders for `eth_subscribe` support.
+    #[must_use]
+    pub fn with_subscriptions(
+        mut self,
+        heads_tx: broadcast::Sender<RpcBlock>,
+        logs_tx: broadcast::Sender<Vec<RpcLog>>,
+    ) -> Self {
+        self.subscription_heads = Some(heads_tx);
+        self.subscription_logs = Some(logs_tx);
         self
     }
 
@@ -388,6 +448,10 @@ impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
         module.merge(eth_api.into_rpc())?;
         module.merge(net_api.into_rpc())?;
         module.merge(web3_api.into_rpc())?;
+        if let (Some(heads_tx), Some(logs_tx)) = (self.subscription_heads, self.subscription_logs) {
+            let sub_api = EthSubscriptionApiImpl::new(heads_tx, logs_tx);
+            module.merge(sub_api.into_rpc())?;
+        }
 
         info!(addr = %self.addr, "Starting JSON-RPC server");
 

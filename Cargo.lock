@@ -3603,6 +3603,7 @@ dependencies = [
  "kora-overlay",
  "kora-qmdb-ledger",
  "kora-rpc",
+ "tokio",
  "tracing",
 ]
 
@@ -3657,6 +3658,7 @@ dependencies = [
  "kora-simplex",
  "kora-transport",
  "rand 0.8.5",
+ "tokio",
  "tracing",
 ]
 

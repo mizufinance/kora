@@ -35,6 +35,9 @@ alloy-primitives.workspace = true
 # Local crates (indexer)
 kora-indexer.workspace = true
 
+# Async
+tokio = { workspace = true, features = ["sync"] }
+
 # Tracing
 tracing.workspace = true
 

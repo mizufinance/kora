@@ -6,6 +6,8 @@
 
 use std::{fmt, marker::PhantomData, sync::Arc};
 
+// Re-import tokio broadcast from the crate (not commonware_runtime::tokio).
+use ::tokio::sync::broadcast;
 use alloy_consensus::{Transaction as _, TxEnvelope, transaction::SignerRecoverable as _};
 use alloy_eips::eip2718::Decodable2718 as _;
 use alloy_primitives::{B256, Bytes, keccak256};
@@ -27,7 +29,7 @@ use kora_indexer::{BlockIndex, IndexedBlock, IndexedLog, IndexedReceipt, Indexed
 use kora_ledger::LedgerService;
 use kora_overlay::OverlayState;
 use kora_qmdb_ledger::QmdbState;
-use kora_rpc::NodeState;
+use kora_rpc::{NodeState, RpcBlock, RpcLog};
 use tracing::{error, trace, warn};
 
 /// Provides block execution context for finalized block verification.
@@ -102,6 +104,13 @@ where
     }
 }
 
+/// Optional subscription broadcast senders.
+struct SubscriptionSenders {
+    heads: broadcast::Sender<RpcBlock>,
+    logs: broadcast::Sender<Vec<RpcLog>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn handle_finalized_update<E, P>(
     state: LedgerService,
     context: tokio::Context,
@@ -109,6 +118,7 @@ async fn handle_finalized_update<E, P>(
     provider: P,
     update: Update<Block>,
     block_index: Option<Arc<BlockIndex>>,
+    subscriptions: Option<SubscriptionSenders>,
 ) where
     E: BlockExecutor<OverlayState<QmdbState>, Tx = Bytes>,
     P: BlockContextProvider,
@@ -203,8 +213,9 @@ async fn handle_finalized_update<E, P>(
                 return;
             }
 
-            // Index the finalized block if a block index is present.
-            if let Some(ref index) = block_index {
+            // Index the finalized block and broadcast subscription events.
+            let needs_receipts = block_index.is_some() || subscriptions.is_some();
+            if needs_receipts {
                 let receipts_result = match cached_receipts {
                     Some(cached) => Some(cached),
                     None => {
@@ -215,7 +226,18 @@ async fn handle_finalized_update<E, P>(
                 };
                 match receipts_result {
                     Some((receipts, gas_used)) => {
-                        index_finalized_block(index, &block, &provider, &receipts, gas_used);
+                        if let Some(ref index) = block_index {
+                            index_finalized_block(index, &block, &provider, &receipts, gas_used);
+                        }
+                        // Broadcast to WebSocket subscribers.
+                        if let Some(ref subs) = subscriptions {
+                            let (rpc_block, rpc_logs) =
+                                build_subscription_data(&block, &provider, &receipts, gas_used);
+                            let _ = subs.heads.send(rpc_block);
+                            if !rpc_logs.is_empty() {
+                                let _ = subs.logs.send(rpc_logs);
+                            }
+                        }
                     }
                     None => {
                         warn!(
@@ -376,6 +398,69 @@ fn index_finalized_block<P: BlockContextProvider>(
     trace!(height = block.height, "indexed finalized block");
 }
 
+/// Build RPC subscription data from a finalized block and its receipts.
+fn build_subscription_data<P: BlockContextProvider>(
+    block: &Block,
+    provider: &P,
+    receipts: &[ExecutionReceipt],
+    gas_used: u64,
+) -> (RpcBlock, Vec<RpcLog>) {
+    use alloy_primitives::{Bytes, U64, U256};
+
+    let block_hash = block.id().0;
+    let block_context = provider.context(block);
+
+    let rpc_block = RpcBlock {
+        hash: block_hash,
+        parent_hash: block.parent.0,
+        number: U64::from(block.height),
+        state_root: block.state_root.0,
+        transactions_root: B256::ZERO,
+        receipts_root: B256::ZERO,
+        logs_bloom: Bytes::new(),
+        timestamp: U64::from(block_context.header.timestamp),
+        gas_limit: U64::from(block_context.header.gas_limit),
+        gas_used: U64::from(gas_used),
+        extra_data: Bytes::new(),
+        mix_hash: B256::ZERO,
+        nonce: Default::default(),
+        base_fee_per_gas: block_context.header.base_fee_per_gas.map(U256::from),
+        miner: alloy_primitives::Address::ZERO,
+        difficulty: U256::ZERO,
+        total_difficulty: U256::ZERO,
+        uncles: vec![],
+        size: U64::ZERO,
+        transactions: kora_rpc::BlockTransactions::Hashes(
+            block.txs.iter().map(|tx| keccak256(&tx.bytes)).collect(),
+        ),
+    };
+
+    let mut rpc_logs = Vec::new();
+    let mut block_log_index: u64 = 0;
+    for (i, tx) in block.txs.iter().enumerate() {
+        let tx_hash = keccak256(&tx.bytes);
+        if let Some(receipt) = receipts.get(i) {
+            for log in receipt.logs() {
+                let idx = block_log_index;
+                block_log_index += 1;
+                rpc_logs.push(RpcLog {
+                    address: log.address,
+                    topics: log.data.topics().to_vec(),
+                    data: log.data.data.clone(),
+                    block_number: U64::from(block.height),
+                    transaction_hash: tx_hash,
+                    transaction_index: U64::from(i as u64),
+                    block_hash,
+                    log_index: U64::from(idx),
+                    removed: false,
+                });
+            }
+        }
+    }
+
+    (rpc_block, rpc_logs)
+}
+
 #[derive(Clone)]
 /// Persists finalized blocks.
 pub struct FinalizedReporter<E, P> {
@@ -389,6 +474,10 @@ pub struct FinalizedReporter<E, P> {
     provider: P,
     /// Optional block index for indexing finalized blocks for RPC queries.
     block_index: Option<Arc<BlockIndex>>,
+    /// Optional broadcast sender for new block headers (WebSocket subscriptions).
+    subscription_heads: Option<broadcast::Sender<RpcBlock>>,
+    /// Optional broadcast sender for new logs (WebSocket subscriptions).
+    subscription_logs: Option<broadcast::Sender<Vec<RpcLog>>>,
 }
 
 impl<E, P> fmt::Debug for FinalizedReporter<E, P> {
@@ -409,13 +498,33 @@ where
         executor: E,
         provider: P,
     ) -> Self {
-        Self { state, context, executor, provider, block_index: None }
+        Self {
+            state,
+            context,
+            executor,
+            provider,
+            block_index: None,
+            subscription_heads: None,
+            subscription_logs: None,
+        }
     }
 
     /// Set the block index for indexing finalized blocks.
     #[must_use]
     pub fn with_block_index(mut self, index: Arc<BlockIndex>) -> Self {
         self.block_index = Some(index);
+        self
+    }
+
+    /// Set subscription broadcast senders for `eth_subscribe` support.
+    #[must_use]
+    pub fn with_subscriptions(
+        mut self,
+        heads_tx: broadcast::Sender<RpcBlock>,
+        logs_tx: broadcast::Sender<Vec<RpcLog>>,
+    ) -> Self {
+        self.subscription_heads = Some(heads_tx);
+        self.subscription_logs = Some(logs_tx);
         self
     }
 }
@@ -433,8 +542,22 @@ where
         let executor = self.executor.clone();
         let provider = self.provider.clone();
         let block_index = self.block_index.clone();
+        let subscriptions = self
+            .subscription_heads
+            .as_ref()
+            .zip(self.subscription_logs.as_ref())
+            .map(|(h, l)| SubscriptionSenders { heads: h.clone(), logs: l.clone() });
         async move {
-            handle_finalized_update(state, context, executor, provider, update, block_index).await;
+            handle_finalized_update(
+                state,
+                context,
+                executor,
+                provider,
+                update,
+                block_index,
+                subscriptions,
+            )
+            .await;
         }
     }
 }

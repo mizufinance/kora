@@ -36,6 +36,7 @@ alloy-consensus = { workspace = true }
 alloy-primitives.workspace = true
 
 futures.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 anyhow.workspace = true
 rand.workspace = true
