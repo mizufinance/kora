@@ -17,6 +17,9 @@ pub use eth::{
     Web3ApiServer,
 };
 
+mod eth_subscribe;
+pub use eth_subscribe::{EthSubscriptionApiImpl, EthSubscriptionApiServer};
+
 mod kora;
 pub use kora::{KoraApiImpl, KoraApiServer};
 

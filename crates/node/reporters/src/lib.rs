@@ -6,6 +6,8 @@
 
 use std::{fmt, marker::PhantomData, sync::Arc};
 
+// Re-import tokio broadcast from the crate (not commonware_runtime::tokio).
+use ::tokio::sync::broadcast;
 use alloy_consensus::{Transaction as _, TxEnvelope, transaction::SignerRecoverable as _};
 use alloy_eips::eip2718::Decodable2718 as _;
 use alloy_primitives::{B256, Bytes, keccak256};
@@ -27,7 +29,7 @@ use kora_indexer::{BlockIndex, IndexedBlock, IndexedLog, IndexedReceipt, Indexed
 use kora_ledger::LedgerService;
 use kora_overlay::OverlayState;
 use kora_qmdb_ledger::QmdbState;
-use kora_rpc::NodeState;
+use kora_rpc::{NodeState, RpcBlock, RpcLog};
 use tracing::{error, trace, warn};
 
 /// Provides block execution context for finalized block verification.
@@ -102,6 +104,13 @@ where
     }
 }
 
+/// Optional subscription broadcast senders.
+struct SubscriptionSenders {
+    heads: broadcast::Sender<RpcBlock>,
+    logs: broadcast::Sender<Vec<RpcLog>>,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn handle_finalized_update<E, P>(
     state: LedgerService,
     context: tokio::Context,
@@ -109,6 +118,7 @@ async fn handle_finalized_update<E, P>(
     provider: P,
     update: Update<Block>,
     block_index: Option<Arc<BlockIndex>>,
+    subscriptions: Option<SubscriptionSenders>,
 ) where
     E: BlockExecutor<OverlayState<QmdbState>, Tx = Bytes>,
     P: BlockContextProvider,
@@ -203,8 +213,9 @@ async fn handle_finalized_update<E, P>(
                 return;
             }
 
-            // Index the finalized block if a block index is present.
-            if let Some(ref index) = block_index {
+            // Index the finalized block and broadcast subscription events.
+            let needs_receipts = block_index.is_some() || subscriptions.is_some();
+            if needs_receipts {
                 let receipts_result = match cached_receipts {
                     Some(cached) => Some(cached),
                     None => {
@@ -215,7 +226,36 @@ async fn handle_finalized_update<E, P>(
                 };
                 match receipts_result {
                     Some((receipts, gas_used)) => {
-                        index_finalized_block(index, &block, &provider, &receipts, gas_used);
+                        if let Some(ref index) = block_index {
+                            index_finalized_block(index, &block, &provider, &receipts, gas_used);
+                        }
+                        // Broadcast to WebSocket subscribers.
+                        if let Some(ref subs) = subscriptions {
+                            let (rpc_block, rpc_logs) =
+                                build_subscription_data(&block, &provider, &receipts, gas_used);
+                            match subs.heads.send(rpc_block) {
+                                Ok(n) => trace!(
+                                    height = block.height,
+                                    receivers = n,
+                                    "broadcast newHeads"
+                                ),
+                                Err(_) => {
+                                    trace!(height = block.height, "no active newHeads subscribers")
+                                }
+                            }
+                            if !rpc_logs.is_empty() {
+                                match subs.logs.send(rpc_logs) {
+                                    Ok(n) => trace!(
+                                        height = block.height,
+                                        receivers = n,
+                                        "broadcast logs"
+                                    ),
+                                    Err(_) => {
+                                        trace!(height = block.height, "no active logs subscribers")
+                                    }
+                                }
+                            }
+                        }
                     }
                     None => {
                         warn!(
@@ -376,6 +416,75 @@ fn index_finalized_block<P: BlockContextProvider>(
     trace!(height = block.height, "indexed finalized block");
 }
 
+/// Build RPC subscription data from a finalized block and its receipts.
+fn build_subscription_data<P: BlockContextProvider>(
+    block: &Block,
+    provider: &P,
+    receipts: &[ExecutionReceipt],
+    gas_used: u64,
+) -> (RpcBlock, Vec<RpcLog>) {
+    use alloy_primitives::{Bytes, U64, U256};
+
+    let block_hash = block.id().0;
+    let block_context = provider.context(block);
+
+    let rpc_block = RpcBlock {
+        hash: block_hash,
+        parent_hash: block.parent.0,
+        number: U64::from(block.height),
+        state_root: block.state_root.0,
+        transactions_root: B256::ZERO,
+        receipts_root: B256::ZERO,
+        logs_bloom: Bytes::new(),
+        timestamp: U64::from(block_context.header.timestamp),
+        gas_limit: U64::from(block_context.header.gas_limit),
+        gas_used: U64::from(gas_used),
+        extra_data: Bytes::new(),
+        mix_hash: B256::ZERO,
+        nonce: Default::default(),
+        base_fee_per_gas: block_context.header.base_fee_per_gas.map(U256::from),
+        miner: alloy_primitives::Address::ZERO,
+        difficulty: U256::ZERO,
+        total_difficulty: U256::ZERO,
+        uncles: vec![],
+        size: U64::ZERO,
+        transactions: kora_rpc::BlockTransactions::Hashes(
+            block.txs.iter().map(|tx| keccak256(&tx.bytes)).collect(),
+        ),
+    };
+
+    let mut rpc_logs = Vec::new();
+    let mut block_log_index: u64 = 0;
+    for (i, tx) in block.txs.iter().enumerate() {
+        let tx_hash = keccak256(&tx.bytes);
+        if let Some(receipt) = receipts.get(i) {
+            for log in receipt.logs() {
+                let idx = block_log_index;
+                block_log_index += 1;
+                rpc_logs.push(RpcLog {
+                    address: log.address,
+                    topics: log.data.topics().to_vec(),
+                    data: log.data.data.clone(),
+                    block_number: U64::from(block.height),
+                    transaction_hash: tx_hash,
+                    transaction_index: U64::from(i as u64),
+                    block_hash,
+                    log_index: U64::from(idx),
+                    removed: false,
+                });
+            }
+        } else {
+            warn!(
+                height = block.height,
+                tx_index = i,
+                "missing receipt for transaction in subscription data"
+            );
+        }
+    }
+
+    (rpc_block, rpc_logs)
+}
+
 #[derive(Clone)]
 /// Persists finalized blocks.
 pub struct FinalizedReporter<E, P> {
@@ -389,6 +498,10 @@ pub struct FinalizedReporter<E, P> {
     provider: P,
     /// Optional block index for indexing finalized blocks for RPC queries.
     block_index: Option<Arc<BlockIndex>>,
+    /// Optional broadcast sender for new block headers (WebSocket subscriptions).
+    subscription_heads: Option<broadcast::Sender<RpcBlock>>,
+    /// Optional broadcast sender for new logs (WebSocket subscriptions).
+    subscription_logs: Option<broadcast::Sender<Vec<RpcLog>>>,
 }
 
 impl<E, P> fmt::Debug for FinalizedReporter<E, P> {
@@ -409,13 +522,33 @@ where
         executor: E,
         provider: P,
     ) -> Self {
-        Self { state, context, executor, provider, block_index: None }
+        Self {
+            state,
+            context,
+            executor,
+            provider,
+            block_index: None,
+            subscription_heads: None,
+            subscription_logs: None,
+        }
     }
 
     /// Set the block index for indexing finalized blocks.
     #[must_use]
     pub fn with_block_index(mut self, index: Arc<BlockIndex>) -> Self {
         self.block_index = Some(index);
+        self
+    }
+
+    /// Set subscription broadcast senders for `eth_subscribe` support.
+    #[must_use]
+    pub fn with_subscriptions(
+        mut self,
+        heads_tx: broadcast::Sender<RpcBlock>,
+        logs_tx: broadcast::Sender<Vec<RpcLog>>,
+    ) -> Self {
+        self.subscription_heads = Some(heads_tx);
+        self.subscription_logs = Some(logs_tx);
         self
     }
 }
@@ -433,8 +566,22 @@ where
         let executor = self.executor.clone();
         let provider = self.provider.clone();
         let block_index = self.block_index.clone();
+        let subscriptions = self
+            .subscription_heads
+            .as_ref()
+            .zip(self.subscription_logs.as_ref())
+            .map(|(h, l)| SubscriptionSenders { heads: h.clone(), logs: l.clone() });
         async move {
-            handle_finalized_update(state, context, executor, provider, update, block_index).await;
+            handle_finalized_update(
+                state,
+                context,
+                executor,
+                provider,
+                update,
+                block_index,
+                subscriptions,
+            )
+            .await;
         }
     }
 }
@@ -501,7 +648,7 @@ mod tests {
     use kora_executor::{BlockContext, ExecutionReceipt};
     use kora_indexer::BlockIndex;
 
-    use super::{BlockContextProvider, index_finalized_block};
+    use super::{BlockContextProvider, build_subscription_data, index_finalized_block};
 
     const GAS_LIMIT: u64 = 30_000_000;
     const CHAIN_ID: u64 = 1337;
@@ -919,5 +1066,71 @@ mod tests {
         assert_eq!(Arc::strong_count(&index), 2);
         drop(index_clone);
         assert_eq!(Arc::strong_count(&index), 1);
+    }
+
+    #[test]
+    fn build_subscription_data_empty_block() {
+        let block = test_block(10, vec![]);
+        let (rpc_block, rpc_logs) = build_subscription_data(&block, &TestContextProvider, &[], 0);
+
+        assert_eq!(rpc_block.number, alloy_primitives::U64::from(10));
+        assert_eq!(rpc_block.hash, block.id().0);
+        assert_eq!(rpc_block.parent_hash, B256::ZERO);
+        assert_eq!(rpc_block.state_root, block.state_root.0);
+        assert_eq!(rpc_block.gas_used, alloy_primitives::U64::ZERO);
+        assert_eq!(rpc_block.gas_limit, alloy_primitives::U64::from(GAS_LIMIT));
+        assert_eq!(rpc_block.timestamp, alloy_primitives::U64::from(10));
+        assert!(rpc_logs.is_empty());
+    }
+
+    #[test]
+    fn build_subscription_data_with_logs() {
+        let from_key = test_key(1);
+        let to = Address::repeat_byte(0xdd);
+        let log_addr_a = Address::repeat_byte(0xaa);
+        let log_addr_b = Address::repeat_byte(0xbb);
+
+        let tx_a = signed_transfer(&from_key, to, 10, 0);
+        let tx_b = signed_transfer(&from_key, to, 20, 1);
+        let hash_a = alloy_primitives::keccak256(&tx_a.bytes);
+        let hash_b = alloy_primitives::keccak256(&tx_b.bytes);
+
+        let block = test_block(5, vec![tx_a, tx_b]);
+        let block_hash = block.id().0;
+
+        // tx_a has 1 log, tx_b has 2 logs.
+        let receipt_a = mock_receipt_with_log(hash_a, 21_000, 21_000, log_addr_a);
+        let receipt_b = mock_receipt_with_logs(hash_b, 21_000, 42_000, &[log_addr_b, log_addr_b]);
+        let total_gas = 42_000;
+
+        let (rpc_block, rpc_logs) = build_subscription_data(
+            &block,
+            &TestContextProvider,
+            &[receipt_a, receipt_b],
+            total_gas,
+        );
+
+        // Block fields.
+        assert_eq!(rpc_block.number, alloy_primitives::U64::from(5));
+        assert_eq!(rpc_block.gas_used, alloy_primitives::U64::from(total_gas));
+
+        // Should have 3 logs total.
+        assert_eq!(rpc_logs.len(), 3);
+
+        // First log from tx_a.
+        assert_eq!(rpc_logs[0].address, log_addr_a);
+        assert_eq!(rpc_logs[0].block_hash, block_hash);
+        assert_eq!(rpc_logs[0].transaction_hash, hash_a);
+        assert_eq!(rpc_logs[0].log_index, alloy_primitives::U64::ZERO);
+        assert_eq!(rpc_logs[0].transaction_index, alloy_primitives::U64::ZERO);
+
+        // Second and third logs from tx_b (log_index continues from tx_a).
+        assert_eq!(rpc_logs[1].address, log_addr_b);
+        assert_eq!(rpc_logs[1].transaction_hash, hash_b);
+        assert_eq!(rpc_logs[1].log_index, alloy_primitives::U64::from(1));
+        assert_eq!(rpc_logs[1].transaction_index, alloy_primitives::U64::from(1));
+
+        assert_eq!(rpc_logs[2].log_index, alloy_primitives::U64::from(2));
+        assert_eq!(rpc_logs[2].transaction_index, alloy_primitives::U64::from(1));
     }
 }

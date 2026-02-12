@@ -215,11 +215,16 @@ impl NodeRunner for ProductionRunner {
             .map_err(|e| anyhow::anyhow!("failed to load validator key: {}", e))?;
         let my_pk = commonware_cryptography::Signer::public_key(&validator_key);
 
+        // Create broadcast channels for WebSocket subscriptions.
+        let (heads_tx, _) = ::tokio::sync::broadcast::channel::<kora_rpc::RpcBlock>(64);
+        let (logs_tx, _) = ::tokio::sync::broadcast::channel::<Vec<kora_rpc::RpcLog>>(256);
+
         let executor = RevmExecutor::new(self.chain_id);
         let context_provider = RevmContextProvider { gas_limit: self.gas_limit };
         let finalized_reporter =
             FinalizedReporter::new(ledger.clone(), context.clone(), executor, context_provider)
-                .with_block_index(block_index.clone());
+                .with_block_index(block_index.clone())
+                .with_subscriptions(heads_tx.clone(), logs_tx.clone());
 
         let scheme_provider = ConstantSchemeProvider::from(self.scheme.clone());
 
@@ -332,7 +337,8 @@ impl NodeRunner for ProductionRunner {
                 *addr,
                 self.chain_id,
                 provider,
-            );
+            )
+            .with_subscriptions(heads_tx, logs_tx);
             let rpc_handle = rpc.start();
             context.clone().shared(true).spawn(move |_| async move {
                 rpc_handle.stopped().await;
