@@ -3,7 +3,7 @@
 use alloy_primitives::{Address, B256};
 use jsonrpsee::{PendingSubscriptionSink, SubscriptionMessage, proc_macros::rpc};
 use tokio::sync::broadcast;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::types::{AddressFilter, RpcBlock, RpcLog, TopicFilter};
 
@@ -70,7 +70,7 @@ fn matches_filter(log: &RpcLog, filter: &SubscriptionLogFilter) -> bool {
 /// Ethereum subscription JSON-RPC API.
 #[rpc(server, namespace = "eth")]
 pub trait EthSubscriptionApi {
-    /// Subscribe to events. Returns a subscription ID.
+    /// Create a new subscription for the given event kind.
     #[subscription(name = "subscribe" => "subscription", unsubscribe = "unsubscribe", item = serde_json::Value)]
     async fn subscribe(
         &self,
@@ -117,18 +117,27 @@ impl EthSubscriptionApiServer for EthSubscriptionApiImpl {
                     loop {
                         match rx.recv().await {
                             Ok(block) => {
-                                let Ok(value) = serde_json::to_value(&block) else {
-                                    break;
+                                let value = match serde_json::to_value(&block) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        warn!(error = %e, "failed to serialize newHeads block");
+                                        break;
+                                    }
                                 };
-                                let Ok(msg) = SubscriptionMessage::from_json(&value) else {
-                                    break;
+                                let msg = match SubscriptionMessage::from_json(&value) {
+                                    Ok(m) => m,
+                                    Err(e) => {
+                                        warn!(error = %e, "failed to build newHeads subscription message");
+                                        break;
+                                    }
                                 };
                                 if sink.send(msg).await.is_err() {
+                                    trace!("newHeads subscriber disconnected");
                                     break;
                                 }
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                trace!(lagged = n, "newHeads subscriber lagged, dropping");
+                                warn!(lagged = n, "newHeads subscriber lagged, dropping");
                                 break;
                             }
                             Err(broadcast::error::RecvError::Closed) => break,
@@ -137,13 +146,22 @@ impl EthSubscriptionApiServer for EthSubscriptionApiImpl {
                 });
             }
             "logs" => {
-                let filter: SubscriptionLogFilter = params
-                    .map(|v| {
-                        serde_json::from_value::<LogSubscriptionParams>(v)
-                            .unwrap_or_default()
-                            .into()
-                    })
-                    .unwrap_or_default();
+                let filter: SubscriptionLogFilter = match params {
+                    Some(v) => match serde_json::from_value::<LogSubscriptionParams>(v) {
+                        Ok(p) => p.into(),
+                        Err(e) => {
+                            let _ = pending
+                                .reject(jsonrpsee::types::ErrorObjectOwned::owned(
+                                    crate::error::codes::INVALID_PARAMS,
+                                    format!("invalid log filter parameters: {e}"),
+                                    None::<()>,
+                                ))
+                                .await;
+                            return Ok(());
+                        }
+                    },
+                    None => SubscriptionLogFilter::default(),
+                };
 
                 let sink = pending.accept().await?;
                 let mut rx = self.logs_tx.subscribe();
@@ -155,19 +173,28 @@ impl EthSubscriptionApiServer for EthSubscriptionApiImpl {
                                     if !matches_filter(log, &filter) {
                                         continue;
                                     }
-                                    let Ok(value) = serde_json::to_value(log) else {
-                                        return;
+                                    let value = match serde_json::to_value(log) {
+                                        Ok(v) => v,
+                                        Err(e) => {
+                                            warn!(error = %e, "failed to serialize log for subscription");
+                                            return;
+                                        }
                                     };
-                                    let Ok(msg) = SubscriptionMessage::from_json(&value) else {
-                                        return;
+                                    let msg = match SubscriptionMessage::from_json(&value) {
+                                        Ok(m) => m,
+                                        Err(e) => {
+                                            warn!(error = %e, "failed to build log subscription message");
+                                            return;
+                                        }
                                     };
                                     if sink.send(msg).await.is_err() {
+                                        trace!("logs subscriber disconnected");
                                         return;
                                     }
                                 }
                             }
                             Err(broadcast::error::RecvError::Lagged(n)) => {
-                                trace!(lagged = n, "logs subscriber lagged, dropping");
+                                warn!(lagged = n, "logs subscriber lagged, dropping");
                                 break;
                             }
                             Err(broadcast::error::RecvError::Closed) => break,
@@ -563,5 +590,58 @@ mod tests {
 
         assert_eq!(notif_a["number"], serde_json::json!(U64::from(7)));
         assert_eq!(notif_b["number"], serde_json::json!(U64::from(7)));
+    }
+
+    #[tokio::test]
+    async fn test_newheads_receives_multiple_blocks() {
+        let (_handle, addr, heads_tx, _logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let client = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+
+        let mut sub = client
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["newHeads"],
+                "eth_unsubscribe",
+            )
+            .await
+            .unwrap();
+
+        // Send two blocks sequentially and verify both arrive in order.
+        heads_tx.send(make_rpc_block(1, B256::repeat_byte(0x11))).unwrap();
+        heads_tx.send(make_rpc_block(2, B256::repeat_byte(0x22))).unwrap();
+
+        let notif1 = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("should receive block 1")
+            .expect("should yield")
+            .expect("should not error");
+        let notif2 = tokio::time::timeout(Duration::from_secs(2), sub.next())
+            .await
+            .expect("should receive block 2")
+            .expect("should yield")
+            .expect("should not error");
+
+        assert_eq!(notif1["number"], serde_json::json!(U64::from(1)));
+        assert_eq!(notif2["number"], serde_json::json!(U64::from(2)));
+    }
+
+    #[tokio::test]
+    async fn test_logs_subscription_invalid_filter_rejected() {
+        let (_handle, addr, _heads_tx, _logs_tx) = setup_test_server().await;
+        let url = format!("ws://127.0.0.1:{}", addr.port());
+        let client = jsonrpsee::ws_client::WsClientBuilder::default().build(&url).await.unwrap();
+
+        // Pass an invalid filter (address should be a hex string, not a number).
+        let bad_filter = serde_json::json!({"address": 12345});
+        let result = client
+            .subscribe::<serde_json::Value, _>(
+                "eth_subscribe",
+                jsonrpsee::rpc_params!["logs", bad_filter],
+                "eth_unsubscribe",
+            )
+            .await;
+
+        assert!(result.is_err(), "invalid filter params should be rejected");
     }
 }

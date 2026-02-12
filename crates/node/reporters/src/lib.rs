@@ -233,9 +233,27 @@ async fn handle_finalized_update<E, P>(
                         if let Some(ref subs) = subscriptions {
                             let (rpc_block, rpc_logs) =
                                 build_subscription_data(&block, &provider, &receipts, gas_used);
-                            let _ = subs.heads.send(rpc_block);
+                            match subs.heads.send(rpc_block) {
+                                Ok(n) => trace!(
+                                    height = block.height,
+                                    receivers = n,
+                                    "broadcast newHeads"
+                                ),
+                                Err(_) => {
+                                    trace!(height = block.height, "no active newHeads subscribers")
+                                }
+                            }
                             if !rpc_logs.is_empty() {
-                                let _ = subs.logs.send(rpc_logs);
+                                match subs.logs.send(rpc_logs) {
+                                    Ok(n) => trace!(
+                                        height = block.height,
+                                        receivers = n,
+                                        "broadcast logs"
+                                    ),
+                                    Err(_) => {
+                                        trace!(height = block.height, "no active logs subscribers")
+                                    }
+                                }
                             }
                         }
                     }
@@ -455,6 +473,12 @@ fn build_subscription_data<P: BlockContextProvider>(
                     removed: false,
                 });
             }
+        } else {
+            warn!(
+                height = block.height,
+                tx_index = i,
+                "missing receipt for transaction in subscription data"
+            );
         }
     }
 
