@@ -78,7 +78,7 @@ impl BlockContextProvider for RevmContextProvider {
     fn context(&self, block: &Block) -> BlockContext {
         let header = Header {
             number: block.height,
-            timestamp: block.height,
+            timestamp: block.timestamp,
             gas_limit: self.gas_limit,
             beneficiary: Address::ZERO,
             base_fee_per_gas: Some(0),

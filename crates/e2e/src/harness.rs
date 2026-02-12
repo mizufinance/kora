@@ -2,7 +2,7 @@
 
 use std::{
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use alloy_consensus::Header;
@@ -685,10 +685,10 @@ impl<S> TestApplication<S> {
         }
     }
 
-    fn block_context(&self, height: u64, prevrandao: B256) -> BlockContext {
+    fn block_context(&self, height: u64, timestamp: u64, prevrandao: B256) -> BlockContext {
         let header = Header {
             number: height,
-            timestamp: height,
+            timestamp,
             gas_limit: self.gas_limit,
             beneficiary: Address::ZERO,
             base_fee_per_gas: Some(0),
@@ -711,7 +711,11 @@ impl<S> TestApplication<S> {
 
         let prevrandao = self.get_prevrandao(parent_digest).await;
         let height = parent.height + 1;
-        let context = self.block_context(height, prevrandao);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_secs();
+        let context = self.block_context(height, timestamp, prevrandao);
         let txs_bytes: Vec<Bytes> = txs.iter().map(|tx| tx.bytes.clone()).collect();
 
         let outcome = self.executor.execute(&parent_snapshot.state, &context, &txs_bytes).ok()?;
@@ -722,7 +726,7 @@ impl<S> TestApplication<S> {
             .await
             .ok()?;
 
-        let block = Block { parent: parent.id(), height, prevrandao, state_root, txs };
+        let block = Block { parent: parent.id(), height, timestamp, prevrandao, state_root, txs };
 
         let merged_changes = parent_snapshot.state.merge_changes(outcome.changes.clone());
         let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
@@ -754,7 +758,7 @@ impl<S> TestApplication<S> {
             return false;
         };
 
-        let context = self.block_context(block.height, block.prevrandao);
+        let context = self.block_context(block.height, block.timestamp, block.prevrandao);
         let execution =
             match BlockExecution::execute(&parent_snapshot, &self.executor, &context, &block.txs)
                 .await

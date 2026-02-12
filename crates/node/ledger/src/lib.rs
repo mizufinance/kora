@@ -98,6 +98,7 @@ impl LedgerView {
         let genesis_block = Block {
             parent: BlockId(B256::ZERO),
             height: 0,
+            timestamp: 0,
             prevrandao: B256::ZERO,
             state_root: genesis_root,
             txs: Vec::new(),
@@ -540,8 +541,14 @@ mod tests {
             .compute_root(parent_digest, outcome.changes.clone())
             .await
             .expect("compute root");
-        let block =
-            Block { parent: parent.id(), height, prevrandao: PREVRANDAO, state_root: root, txs };
+        let block = Block {
+            parent: parent.id(),
+            height,
+            timestamp: 1_700_000_000 + height,
+            prevrandao: PREVRANDAO,
+            state_root: root,
+            txs,
+        };
         let digest = block.commitment();
         let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
         service

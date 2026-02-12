@@ -671,7 +671,7 @@ mod tests {
         fn context(&self, block: &Block) -> BlockContext {
             let header = Header {
                 number: block.height,
-                timestamp: block.height,
+                timestamp: block.timestamp,
                 gas_limit: GAS_LIMIT,
                 beneficiary: Address::ZERO,
                 base_fee_per_gas: Some(0),
@@ -691,6 +691,7 @@ mod tests {
         Block {
             parent: BlockId(B256::ZERO),
             height,
+            timestamp: 1_700_000_000 + height,
             prevrandao: B256::ZERO,
             state_root: StateRoot(B256::repeat_byte(0xaa)),
             txs,
@@ -987,6 +988,7 @@ mod tests {
         let block = Block {
             parent: BlockId(parent_hash),
             height: 99,
+            timestamp: 1_700_000_099,
             prevrandao: B256::ZERO,
             state_root: StateRoot(state_root),
             txs: vec![],
