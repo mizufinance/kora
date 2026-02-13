@@ -13,13 +13,15 @@ pub struct ExecutionOutcome {
     pub receipts: Vec<ExecutionReceipt>,
     /// Total gas used by all transactions.
     pub gas_used: u64,
+    /// JMT root of the IBC state tree after execution.
+    pub ibc_root: B256,
 }
 
 impl ExecutionOutcome {
     /// Create a new empty execution outcome.
     #[must_use]
     pub fn new() -> Self {
-        Self { changes: ChangeSet::new(), receipts: Vec::new(), gas_used: 0 }
+        Self { changes: ChangeSet::new(), receipts: Vec::new(), gas_used: 0, ibc_root: B256::ZERO }
     }
 }
 
