@@ -101,6 +101,7 @@ impl LedgerView {
             timestamp: 0,
             prevrandao: B256::ZERO,
             state_root: genesis_root,
+            ibc_root: B256::ZERO,
             txs: Vec::new(),
         };
         let genesis_digest = genesis_block.commitment();
@@ -547,6 +548,7 @@ mod tests {
             timestamp: 1_700_000_000 + height,
             prevrandao: PREVRANDAO,
             state_root: root,
+            ibc_root: B256::ZERO,
             txs,
         };
         let digest = block.commitment();

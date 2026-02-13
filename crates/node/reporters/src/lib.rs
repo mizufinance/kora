@@ -694,6 +694,7 @@ mod tests {
             timestamp: 1_700_000_000 + height,
             prevrandao: B256::ZERO,
             state_root: StateRoot(B256::repeat_byte(0xaa)),
+            ibc_root: B256::ZERO,
             txs,
         }
     }
@@ -991,6 +992,7 @@ mod tests {
             timestamp: 1_700_000_099,
             prevrandao: B256::ZERO,
             state_root: StateRoot(state_root),
+            ibc_root: B256::ZERO,
             txs: vec![],
         };
         let index = Arc::new(BlockIndex::new());

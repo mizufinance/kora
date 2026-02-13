@@ -116,7 +116,8 @@ where
             .map_err(ConsensusError::StateDb)?;
         let state_root = StateRoot(state_root);
 
-        let block = Block { parent: parent.id(), height, timestamp, prevrandao, state_root, txs };
+        let block =
+            Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root: B256::ZERO, txs };
         let tx_ids = self.tx_ids_from_block(&block);
         let snapshot = Snapshot::new(
             Some(parent_digest),
@@ -159,7 +160,8 @@ where
             self.state.compute_root(&merged_changes).await.map_err(ConsensusError::StateDb)?;
         let state_root = StateRoot(state_root);
 
-        let block = Block { parent: parent.id(), height, timestamp, prevrandao, state_root, txs };
+        let block =
+            Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root: B256::ZERO, txs };
         let tx_ids = self.tx_ids_from_block(&block);
         let snapshot = Snapshot::new(
             Some(parent_digest),
@@ -409,6 +411,7 @@ mod tests {
             timestamp: 1_700_000_000,
             prevrandao: B256::ZERO,
             state_root: StateRoot(B256::ZERO),
+            ibc_root: B256::ZERO,
             txs: Vec::new(),
         }
     }
@@ -628,6 +631,7 @@ mod tests {
             timestamp: 1_700_000_000,
             prevrandao: B256::ZERO,
             state_root: StateRoot(B256::ZERO),
+            ibc_root: B256::ZERO,
             txs: vec![tx.clone()],
         };
         let parent_digest = parent.commitment();
