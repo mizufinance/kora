@@ -82,6 +82,7 @@ pub struct RpcServer<S: StateProvider = NoopStateProvider> {
     max_connections: u32,
     subscription_heads: Option<broadcast::Sender<RpcBlock>>,
     subscription_logs: Option<broadcast::Sender<Vec<RpcLog>>>,
+    extra_modules: Vec<jsonrpsee::RpcModule<()>>,
 }
 
 impl<S: StateProvider> std::fmt::Debug for RpcServer<S> {
@@ -109,6 +110,7 @@ impl RpcServer<NoopStateProvider> {
             max_connections: 100,
             subscription_heads: None,
             subscription_logs: None,
+            extra_modules: Vec::new(),
         }
     }
 
@@ -124,6 +126,7 @@ impl RpcServer<NoopStateProvider> {
             max_connections: 100,
             subscription_heads: None,
             subscription_logs: None,
+            extra_modules: Vec::new(),
         }
     }
 }
@@ -146,6 +149,7 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
             max_connections: 100,
             subscription_heads: None,
             subscription_logs: None,
+            extra_modules: Vec::new(),
         }
     }
 
@@ -182,6 +186,13 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
         self
     }
 
+    /// Merge an additional JSON-RPC module into the server.
+    #[must_use]
+    pub fn with_extra_module(mut self, module: jsonrpsee::RpcModule<()>) -> Self {
+        self.extra_modules.push(module);
+        self
+    }
+
     /// Create from configuration.
     pub fn from_config(state: NodeState, config: RpcServerConfig, state_provider: S) -> Self {
         Self {
@@ -194,6 +205,7 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
             max_connections: config.max_connections,
             subscription_heads: None,
             subscription_logs: None,
+            extra_modules: Vec::new(),
         }
     }
 
@@ -219,6 +231,8 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
 
         // JSON-RPC server serves eth_*, kora_*, net_*, web3_* methods over both
         // HTTP and WebSocket. It binds first and signals readiness to the HTTP task.
+        let extra_modules = self.extra_modules;
+
         let jsonrpc_handle = tokio::spawn(async move {
             let server = match Server::builder().max_connections(max_connections).build(addr).await
             {
@@ -263,6 +277,13 @@ impl<S: StateProvider + Clone + 'static> RpcServer<S> {
                 let sub_api = EthSubscriptionApiImpl::new(heads_tx, logs_tx);
                 if let Err(e) = module.merge(sub_api.into_rpc()) {
                     error!(error = %e, "Failed to merge subscription API");
+                    let _ = jsonrpc_ready_tx.send(false);
+                    return None;
+                }
+            }
+            for extra in extra_modules {
+                if let Err(e) = module.merge(extra) {
+                    error!(error = %e, "Failed to merge extra API module");
                     let _ = jsonrpc_ready_tx.send(false);
                     return None;
                 }
@@ -362,6 +383,7 @@ pub struct JsonRpcServer<S: StateProvider = NoopStateProvider> {
     max_connections: u32,
     subscription_heads: Option<broadcast::Sender<RpcBlock>>,
     subscription_logs: Option<broadcast::Sender<Vec<RpcLog>>>,
+    extra_modules: Vec<jsonrpsee::RpcModule<()>>,
 }
 
 impl<S: StateProvider> std::fmt::Debug for JsonRpcServer<S> {
@@ -385,6 +407,7 @@ impl JsonRpcServer<NoopStateProvider> {
             max_connections: 100,
             subscription_heads: None,
             subscription_logs: None,
+            extra_modules: Vec::new(),
         }
     }
 }
@@ -400,6 +423,7 @@ impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
             max_connections: 100,
             subscription_heads: None,
             subscription_logs: None,
+            extra_modules: Vec::new(),
         }
     }
 
@@ -429,6 +453,13 @@ impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
         self
     }
 
+    /// Merge an additional JSON-RPC module into the server.
+    #[must_use]
+    pub fn with_extra_module(mut self, module: jsonrpsee::RpcModule<()>) -> Self {
+        self.extra_modules.push(module);
+        self
+    }
+
     /// Start the JSON-RPC server.
     ///
     /// Returns the server handle and the actual bound address (useful when binding to port 0).
@@ -455,6 +486,9 @@ impl<S: StateProvider + Clone + 'static> JsonRpcServer<S> {
         if let (Some(heads_tx), Some(logs_tx)) = (self.subscription_heads, self.subscription_logs) {
             let sub_api = EthSubscriptionApiImpl::new(heads_tx, logs_tx);
             module.merge(sub_api.into_rpc())?;
+        }
+        for extra in self.extra_modules {
+            module.merge(extra)?;
         }
 
         info!(addr = %local_addr, "Starting JSON-RPC server");
