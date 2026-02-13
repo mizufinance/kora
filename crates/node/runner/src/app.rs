@@ -116,7 +116,8 @@ where
             .ok()?;
         let root_elapsed = root_start.elapsed();
 
-        let block = Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root: B256::ZERO, txs };
+        let ibc_root = outcome.ibc_root;
+        let block = Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root, txs };
 
         let merged_changes = parent_snapshot.state.merge_changes(outcome.changes.clone());
         let next_state = OverlayState::new(parent_snapshot.state.base(), merged_changes);
@@ -219,6 +220,16 @@ where
                 expected = ?block.state_root,
                 computed = ?state_root,
                 "state root mismatch"
+            );
+            return false;
+        }
+
+        if execution.outcome.ibc_root != block.ibc_root {
+            warn!(
+                ?digest,
+                expected = ?block.ibc_root,
+                computed = ?execution.outcome.ibc_root,
+                "ibc root mismatch"
             );
             return false;
         }

@@ -116,8 +116,9 @@ where
             .map_err(ConsensusError::StateDb)?;
         let state_root = StateRoot(state_root);
 
+        let ibc_root = outcome.ibc_root;
         let block =
-            Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root: B256::ZERO, txs };
+            Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root, txs };
         let tx_ids = self.tx_ids_from_block(&block);
         let snapshot = Snapshot::new(
             Some(parent_digest),
@@ -160,8 +161,9 @@ where
             self.state.compute_root(&merged_changes).await.map_err(ConsensusError::StateDb)?;
         let state_root = StateRoot(state_root);
 
+        let ibc_root = outcome.ibc_root;
         let block =
-            Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root: B256::ZERO, txs };
+            Block { parent: parent.id(), height, timestamp, prevrandao, state_root, ibc_root, txs };
         let tx_ids = self.tx_ids_from_block(&block);
         let snapshot = Snapshot::new(
             Some(parent_digest),
@@ -392,6 +394,7 @@ mod tests {
                 changes: ChangeSet::new(),
                 receipts: Vec::new(),
                 gas_used: txs.len() as u64 * 21000,
+                ibc_root: B256::ZERO,
             })
         }
 
