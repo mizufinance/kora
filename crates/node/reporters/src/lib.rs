@@ -419,6 +419,7 @@ fn index_finalized_block<P: BlockContextProvider>(
         gas_limit: block_context.header.gas_limit,
         gas_used,
         base_fee_per_gas: block_context.header.base_fee_per_gas,
+        prevrandao: block.prevrandao,
         transaction_hashes: tx_hashes,
     };
 
@@ -450,7 +451,7 @@ fn build_subscription_data<P: BlockContextProvider>(
         gas_limit: U64::from(block_context.header.gas_limit),
         gas_used: U64::from(gas_used),
         extra_data: Bytes::new(),
-        mix_hash: B256::ZERO,
+        mix_hash: block.prevrandao,
         nonce: Default::default(),
         base_fee_per_gas: block_context.header.base_fee_per_gas.map(U256::from),
         miner: alloy_primitives::Address::ZERO,
