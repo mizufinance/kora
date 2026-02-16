@@ -9,8 +9,8 @@ use rand_core::CryptoRngCore;
 
 use crate::{
     channels::{
-        CHANNEL_BACKFILL, CHANNEL_BLOCKS, CHANNEL_CERTS, CHANNEL_RESOLVER, CHANNEL_VOTES,
-        MarshalChannels, SimplexChannels,
+        CHANNEL_BACKFILL, CHANNEL_BLOCKS, CHANNEL_CERTS, CHANNEL_MEMPOOL, CHANNEL_RESOLVER,
+        CHANNEL_VOTES, MarshalChannels, MempoolChannels, SimplexChannels,
     },
     config::TransportConfig,
     transport::NetworkTransport,
@@ -84,16 +84,20 @@ impl<C: Signer> TransportConfig<C> {
         let blocks = network.register(CHANNEL_BLOCKS, quota, backlog);
         let backfill = network.register(CHANNEL_BACKFILL, quota, backlog);
 
+        // Register mempool channel (Gulf Stream tx forwarding)
+        let mempool_txs = network.register(CHANNEL_MEMPOOL, quota, backlog);
+
         // Start the network
         let handle = network.start();
 
-        tracing::info!("network transport started with 5 channels");
+        tracing::info!("network transport started with 6 channels");
 
         NetworkTransport {
             oracle,
             handle,
             simplex: SimplexChannels { votes, certs, resolver },
             marshal: MarshalChannels { blocks, backfill },
+            mempool: MempoolChannels { txs: mempool_txs },
         }
     }
 }

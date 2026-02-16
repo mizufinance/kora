@@ -21,6 +21,7 @@ pub struct NodeState {
 struct NodeStateInner {
     chain_id: u64,
     validator_index: u32,
+    validator_count: u32,
     started_at: Instant,
     current_view: AtomicU64,
     finalized_count: AtomicU64,
@@ -33,11 +34,12 @@ struct NodeStateInner {
 impl NodeState {
     /// Create a new node state.
     #[must_use]
-    pub fn new(chain_id: u64, validator_index: u32) -> Self {
+    pub fn new(chain_id: u64, validator_index: u32, validator_count: u32) -> Self {
         Self {
             inner: Arc::new(NodeStateInner {
                 chain_id,
                 validator_index,
+                validator_count: validator_count.max(1),
                 started_at: Instant::now(),
                 current_view: AtomicU64::new(0),
                 finalized_count: AtomicU64::new(0),
@@ -52,9 +54,33 @@ impl NodeState {
     /// Update the current view.
     pub fn set_view(&self, view: u64) {
         self.inner.current_view.store(view, Ordering::Relaxed);
-        // Compute leader: view mod 4 (for 4 validators)
-        let is_leader = (view % 4) as u32 == self.inner.validator_index;
+        let is_leader = self.leader_index_for_view(view) == self.inner.validator_index;
         *self.inner.is_leader.write() = is_leader;
+    }
+
+    /// Get the current consensus view.
+    pub fn current_view(&self) -> u64 {
+        self.inner.current_view.load(Ordering::Relaxed)
+    }
+
+    /// Get this validator's index.
+    pub fn validator_index(&self) -> u32 {
+        self.inner.validator_index
+    }
+
+    /// Get the total number of validators.
+    pub fn validator_count(&self) -> u32 {
+        self.inner.validator_count
+    }
+
+    /// Compute the leader index for a given view (round-robin).
+    pub fn leader_index_for_view(&self, view: u64) -> u32 {
+        (view % u64::from(self.inner.validator_count)) as u32
+    }
+
+    /// Whether this node is the leader for the current view.
+    pub fn is_current_leader(&self) -> bool {
+        *self.inner.is_leader.read()
     }
 
     /// Increment finalized block count.
@@ -177,7 +203,7 @@ mod tests {
 
     #[test]
     fn node_state_new() {
-        let state = NodeState::new(1337, 2);
+        let state = NodeState::new(1337, 2, 4);
         let status = state.status();
         assert_eq!(status.chain_id, 1337);
         assert_eq!(status.validator_index, 2);
@@ -186,7 +212,7 @@ mod tests {
 
     #[test]
     fn node_state_set_view() {
-        let state = NodeState::new(1, 0);
+        let state = NodeState::new(1, 0, 4);
         state.set_view(4);
         let status = state.status();
         assert_eq!(status.current_view, 4);
@@ -194,8 +220,22 @@ mod tests {
     }
 
     #[test]
+    fn node_state_leader_schedule() {
+        let state = NodeState::new(1, 2, 5);
+        assert_eq!(state.leader_index_for_view(0), 0);
+        assert_eq!(state.leader_index_for_view(2), 2);
+        assert_eq!(state.leader_index_for_view(5), 0);
+        assert_eq!(state.leader_index_for_view(7), 2);
+
+        state.set_view(7);
+        assert!(state.is_current_leader());
+        state.set_view(8);
+        assert!(!state.is_current_leader());
+    }
+
+    #[test]
     fn node_state_inc_counters() {
-        let state = NodeState::new(1, 0);
+        let state = NodeState::new(1, 0, 4);
         state.inc_finalized();
         state.inc_finalized();
         state.inc_proposed();
@@ -209,7 +249,7 @@ mod tests {
 
     #[test]
     fn node_state_set_peer_count() {
-        let state = NodeState::new(1, 0);
+        let state = NodeState::new(1, 0, 4);
         state.set_peer_count(5);
         assert_eq!(state.status().peer_count, 5);
     }

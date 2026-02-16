@@ -10,8 +10,8 @@ use rand_core::CryptoRngCore;
 use crate::{
     TransportBundle, TransportConfig, TransportError, TransportProvider,
     channels::{
-        CHANNEL_BACKFILL, CHANNEL_BLOCKS, CHANNEL_CERTS, CHANNEL_RESOLVER, CHANNEL_VOTES,
-        MarshalChannels, SimplexChannels,
+        CHANNEL_BACKFILL, CHANNEL_BLOCKS, CHANNEL_CERTS, CHANNEL_MEMPOOL, CHANNEL_RESOLVER,
+        CHANNEL_VOTES, MarshalChannels, MempoolChannels, SimplexChannels,
     },
 };
 
@@ -76,14 +76,16 @@ where
         let resolver = network.register(CHANNEL_RESOLVER, self.quota, backlog);
         let blocks = network.register(CHANNEL_BLOCKS, self.quota, backlog);
         let backfill = network.register(CHANNEL_BACKFILL, self.quota, backlog);
+        let mempool_txs = network.register(CHANNEL_MEMPOOL, self.quota, backlog);
 
         let handle = network.start();
 
-        tracing::info!("network transport started with 5 channels");
+        tracing::info!("network transport started with 6 channels");
 
         let bundle = TransportBundle::new(
             SimplexChannels { votes, certs, resolver },
             MarshalChannels { blocks, backfill },
+            MempoolChannels { txs: mempool_txs },
             handle,
         );
 

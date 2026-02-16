@@ -153,7 +153,11 @@ impl Cli {
         // Create RPC state that will be updated by consensus
         let rpc_port = 8545 + dkg_output.share_index as u16;
         let rpc_addr: std::net::SocketAddr = format!("0.0.0.0:{}", rpc_port).parse()?;
-        let node_state = NodeState::new(config.chain_id, dkg_output.share_index);
+        let node_state = NodeState::new(
+            config.chain_id,
+            dkg_output.share_index,
+            scheme.participants().len() as u32,
+        );
 
         let runner = ProductionRunner::new(
             scheme,

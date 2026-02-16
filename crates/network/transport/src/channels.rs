@@ -21,6 +21,9 @@ pub const CHANNEL_BLOCKS: u64 = 3;
 /// Channel ID for backfill messages.
 pub const CHANNEL_BACKFILL: u64 = 4;
 
+/// Channel ID for mempool forwarding messages (Gulf Stream).
+pub const CHANNEL_MEMPOOL: u64 = 5;
+
 /// Type alias for channel sender.
 pub type Sender<P, E> = discovery::Sender<P, E>;
 
@@ -61,5 +64,20 @@ pub struct MarshalChannels<P: PublicKey, E: Clock> {
 impl<P: PublicKey, E: Clock> fmt::Debug for MarshalChannels<P, E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MarshalChannels").finish_non_exhaustive()
+    }
+}
+
+/// Channel for mempool transaction forwarding (Gulf Stream).
+///
+/// Validators forward transactions to the predicted next leader
+/// so that txs submitted to any node reach the proposer.
+pub struct MempoolChannels<P: PublicKey, E: Clock> {
+    /// Transaction forwarding: raw tx bytes sent to current leader.
+    pub txs: (Sender<P, E>, Receiver<P>),
+}
+
+impl<P: PublicKey, E: Clock> fmt::Debug for MempoolChannels<P, E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MempoolChannels").finish_non_exhaustive()
     }
 }
